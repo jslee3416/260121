@@ -3,6 +3,7 @@ import pandas as pd
 import os
 import urllib.parse
 
+
 # 1. 페이지 설정
 st.set_page_config(page_title="서울 맛집 검색 서비스", layout="wide")
 
