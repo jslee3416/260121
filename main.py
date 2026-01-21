@@ -3,64 +3,63 @@ import pandas as pd
 import urllib.parse
 import os
 
-# 1. 페이지 설정 및 다크 테마 감성 적용
-st.set_page_config(page_title="SEOUL GOURMET GUIDE", layout="wide")
+# 1. 페이지 설정 및 프리미엄 스타일 적용
+st.set_page_config(page_title="SEOUL GOURMET", layout="wide")
 
-# CSS를 통한 고급스러운 UI 커스텀
 st.markdown("""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,700;1,400&display=swap');
     
-    .main {
-        background-color: #ffffff;
-    }
-    .stTitle {
+    .stApp { background-color: #ffffff; }
+    
+    .main-title {
         font-family: 'Playfair Display', serif;
-        font-size: 3rem !important;
-        color: #1a1a1a;
+        font-size: 3.5rem;
+        color: #111111;
         text-align: center;
-        margin-bottom: 0.5rem;
+        margin-top: 2rem;
+        letter-spacing: -1px;
     }
     .sub-title {
         font-family: 'Playfair Display', serif;
         font-style: italic;
         text-align: center;
-        color: #757575;
-        margin-bottom: 3rem;
+        color: #888888;
+        margin-bottom: 4rem;
+        font-size: 1.1rem;
     }
     .restaurant-card {
-        border-bottom: 1px solid #e0e0e0;
-        padding: 40px 20px;
-        transition: all 0.3s ease;
+        border-bottom: 1px solid #eeeeee;
+        padding: 50px 0;
+        max-width: 800px;
+        margin: 0 auto;
+        text-align: center;
     }
-    .restaurant-card:hover {
-        background-color: #fcfcfc;
+    .location-tag {
+        font-size: 0.8rem;
+        color: #b59d5f; /* 골드 톤 포인트 */
+        letter-spacing: 2px;
+        text-transform: uppercase;
+        margin-bottom: 15px;
     }
     .restaurant-name {
         font-family: 'Playfair Display', serif;
-        font-size: 1.8rem;
-        color: #111;
-        margin-bottom: 10px;
-        letter-spacing: -0.5px;
-    }
-    .restaurant-location {
-        font-size: 0.9rem;
-        color: #888;
-        letter-spacing: 1px;
-        text-transform: uppercase;
+        font-size: 2.2rem;
+        color: #1a1a1a;
         margin-bottom: 25px;
     }
-    .btn-google {
+    .btn-explore {
         display: inline-block;
         border: 1px solid #1a1a1a;
         color: #1a1a1a;
-        padding: 12px 25px;
+        padding: 12px 30px;
         text-decoration: none;
-        font-size: 0.8rem;
-        letter-spacing: 2px;
-        transition: all 0.3s;
+        font-size: 0.75rem;
+        letter-spacing: 1.5px;
+        transition: 0.4s;
+        text-transform: uppercase;
     }
-    .btn-google:hover {
+    .btn-explore:hover {
         background-color: #1a1a1a;
         color: #ffffff !important;
     }
@@ -70,63 +69,79 @@ st.markdown("""
 DATA_FILE = "restaurants.csv"
 
 @st.cache_data
-def load_data(file_name):
+def load_gourmet_data(file_name):
     try:
         current_dir = os.path.dirname(os.path.abspath(__file__))
         file_path = os.path.join(current_dir, file_name)
-        if not os.path.exists(file_path): return pd.DataFrame()
-
-        df = None
-        for enc in ['utf-8-sig', 'cp949', 'utf-8']:
-            try:
-                df = pd.read_csv(file_path, encoding=enc, on_bad_lines='skip', low_memory=False)
-                if df is not None and not df.empty: break
-            except: continue
         
-        if df is None: return pd.DataFrame()
+        if not os.path.exists(file_path):
+            return pd.DataFrame()
 
-        # 순서 기반 추출: 1번(식당명), 4번 내외(지역명)
-        name_col = df.columns[1]
-        area_col = next((c for c in df.columns if '지역' in str(c) or '주소' in str(c)), df.columns[-1])
+        # [안정화 로직] 인코딩 및 엔진 설정 강화
+        df = None
+        for enc in ['utf-8-sig', 'cp949', 'utf-8', 'euc-kr']:
+            try:
+                # low_memory=False로 타입 추론 오류 방지
+                df = pd.read_csv(file_path, encoding=enc, on_bad_lines='skip', low_memory=False)
+                if df is not None and not df.empty:
+                    # 컬럼명 앞뒤 공백 제거 및 문자열 변환
+                    df.columns = [str(c).strip() for c in df.columns]
+                    break
+            except:
+                continue
+        
+        if df is None or df.empty:
+            return pd.DataFrame()
 
-        new_df = df[[name_col, area_col]].copy()
-        new_df.columns = ['상호', '지역']
+        # [위치 기반 매칭] 2번째 컬럼(식당명), 4번째 혹은 마지막(지역명)
+        # 만약 컬럼이 부족하면 에러 없이 안전하게 인덱스 조절
+        name_idx = 1 if len(df.columns) > 1 else 0
+        area_idx = 4 if len(df.columns) > 4 else (len(df.columns) - 1)
+        
+        new_df = pd.DataFrame({
+            '상호': df.iloc[:, name_idx],
+            '지역': df.iloc[:, area_idx]
+        })
+        
+        # '구' 추출 로직
         new_df['구'] = new_df['지역'].apply(lambda x: str(x).split()[0] if pd.notna(x) else "SEOUL")
         
         return new_df.dropna(subset=['상호']).reset_index(drop=True)
-    except:
+    except Exception as e:
+        st.sidebar.error(f"System Load Error: {e}")
         return pd.DataFrame()
 
-df = load_data(DATA_FILE)
+# 데이터 로드
+df = load_gourmet_data(DATA_FILE)
 
-# 2. UI 구성
-st.markdown("<h1 class='stTitle'>SEOUL GOURMET</h1>", unsafe_allow_html=True)
-st.markdown("<p class='sub-title'>A Curated Selection of the City's Finest Dining</p>", unsafe_allow_html=True)
+# 2. 메인 UI 출력
+st.markdown("<div class='main-title'>SEOUL GOURMET</div>", unsafe_allow_html=True)
+st.markdown("<div class='sub-title'>Fine Dining & Exceptional Taste</div>", unsafe_allow_html=True)
 
 if not df.empty:
-    # 사이드바 디자인
-    st.sidebar.markdown("<br><br>", unsafe_allow_html=True)
+    # 사이드바: DISTRICT SELECTOR
+    st.sidebar.markdown("<p style='letter-spacing:2px; font-size:0.8rem; color:#888;'>CHOOSE DISTRICT</p>", unsafe_allow_html=True)
     gu_list = sorted(df['구'].unique())
-    selected_gu = st.sidebar.selectbox("SELECT DISTRICT", gu_list)
+    selected_gu = st.sidebar.selectbox("", gu_list, label_visibility="collapsed")
     
-    # 해당 구 상위 20개
+    # 해당 구 상위 20개 리스팅
     filtered_df = df[df['구'] == selected_gu].head(20)
 
-    # 3. 고급스러운 리스트 출력 (이미지 삭제, 텍스트 중심)
-    for i, row in filtered_df.iterrows():
+    # 3. 고급스러운 리스트 출력 (미니멀 텍스트 중심)
+    for _, row in filtered_df.iterrows():
+        # 검색 쿼리: 주소 + 상호 + 평점
         search_query = f"{row['지역']} {row['상호']} 평점"
         google_url = f"https://www.google.com/search?q={urllib.parse.quote(search_query)}"
         
         st.markdown(f"""
             <div class="restaurant-card">
-                <div class="restaurant-location">{row['지역']}</div>
+                <div class="location-tag">{row['지역']}</div>
                 <div class="restaurant-name">{row['상호']}</div>
-                <div style="margin-top: 20px;">
-                    <a href="{google_url}" target="_blank" class="btn-google">
-                        EXPLORE REVIEWS & RATING
-                    </a>
-                </div>
+                <a href="{google_url}" target="_blank" class="btn-explore">
+                    View Ratings & Reviews
+                </a>
             </div>
             """, unsafe_allow_html=True)
 else:
-    st.error("Unable to load the gourmet database.")
+    st.error("The gourmet database is currently unavailable.")
+    st.info("Check if 'restaurants.csv' exists in the repository.")
