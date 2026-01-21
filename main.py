@@ -1,73 +1,79 @@
-
-import folium
+import streamlit as st
 import pandas as pd
-import requests
-from math import radians, cos, sin, asin, sqrt
+import folium
+from streamlit_folium import st_folium
 
-# 1. 하버사인 공식 (두 지점 사이의 거리 계산)
-def haversine(lat1, lon1, lat2, lon2):
-    R = 6371  # 지구 반지름 (km)
-    lat1, lon1, lat2, lon2 = map(radians, [lat1, lon1, lat2, lon2])
-    dlat = lat2 - lat1
-    dlon = lon2 - lon1
-    a = sin(dlat/2)**2 + cos(lat1) * cos(lat2) * sin(dlon/2)**2
-    c = 2 * asin(sqrt(a))
-    return c * 1000  # 미터 단위 변환
+# 1. 페이지 설정
+st.set_page_config(layout="wide")
+st.title("서울시 행정구역별 식당 추천 서비스 🍴")
 
-# 2. 현재 내 위치 설정 (예: 서울시청)
-# 실제 웹앱에서는 브라우저 GPS 값을 가져오거나 input을 받도록 구성할 수 있습니다.
-my_location = [37.5665, 126.9780] 
+# 2. 샘플 데이터 생성 (실제 환경에서는 API 또는 CSV 로드)
+@st.cache_data
+def load_data():
+    # 실제로는 pd.read_csv() 또는 API 호출 코드가 들어갑니다.
+    data = {
+        '상호': ['무교동 낙지', '광화문 국밥', '명동 칼국수', '강남 수제버거', '신사 파스타'],
+        '자치구명': ['중구', '중구', '중구', '강남구', '강남구'],
+        '법정동명': ['무교동', '정동', '명동', '역삼동', '신사동'],
+        'lat': [37.5670, 37.5685, 37.5600, 37.4980, 37.5240],
+        'lon': [126.9790, 126.9770, 126.9850, 127.0270, 127.0220],
+        '전화번호': ['02-111-1111', '02-222-2222', '02-333-3333', '02-444-4444', '02-555-5555'],
+        '평점': [4.5, 4.2, 4.8, 3.9, 4.3]
+    }
+    return pd.DataFrame(data)
 
-# 3. 데이터 불러오기 (서울관광재단 데이터 예시 구조)
-# 여기서는 예시를 위해 데이터프레임을 직접 생성하지만, 
-# 실제로는 requests.get(API_URL)을 통해 받아온 JSON/CSV를 사용합니다.
-data = {
-    '상호': ['무교동 낙지', '광화문 국밥', '정동 칼국수', '덕수궁 와플', '시청 소바'],
-    'lat': [37.5670, 37.5685, 37.5645, 37.5658, 37.5690],
-    'lon': [126.9790, 126.9770, 126.9750, 126.9765, 126.9805],
-    '전화번호': ['02-123-4567', '02-234-5678', '02-345-6789', '02-456-7890', '02-567-8901'],
-    '평점': [4.5, 4.2, 3.8, 4.8, 4.1]
-}
-df = pd.DataFrame(data)
+df = load_data()
 
-# 4. 지도 생성 및 반경 표시
-m = folium.Map(location=my_location, zoom_start=16)
+# 3. 사이드바 - 행정구역 선택창
+st.sidebar.header("📍 지역 선택")
 
-# 내 위치 표시
-folium.Marker(my_location, icon=folium.Icon(color='red', icon='info-sign'), tooltip="내 위치").add_to(m)
+# '구' 선택
+sido_list = sorted(df['자치구명'].unique())
+selected_gu = st.sidebar.selectbox("자치구(구)를 선택하세요", sido_list)
 
-# 반경 서클 표시 (300m, 500m, 1000m)
-for radius, color in zip([300, 500, 1000], ['blue', 'green', 'orange']):
-    folium.Circle(
-        location=my_location,
-        radius=radius,
-        color=color,
-        fill=True,
-        fill_opacity=0.1,
-        tooltip=f'반경 {radius}m'
-    ).add_to(m)
+# 선택된 '구'에 해당하는 '동' 목록 필터링
+dong_list = sorted(df[df['자치구명'] == selected_gu]['법정동명'].unique())
+selected_dong = st.sidebar.selectbox("법정동(동)을 선택하세요", dong_list)
 
-# 5. 거리 계산 및 조건 필터링 (평점 4점 이상, 반경 내 식당)
-for idx, row in df.iterrows():
-    dist = haversine(my_location[0], my_location[1], row['lat'], row['lon'])
-    
-    # 반경 1000m 이내이고 평점이 4.0 이상인 경우만 마커 표시
-    if dist <= 1000 and row['평점'] >= 4.0:
-        # 마우스 호버 시 나타날 툴팁 구성
-        tooltip_html = f"""
-        <div style="font-family: sans-serif;">
-            <h4>{row['상호']}</h4>
-            <b>전화:</b> {row['전화번호']}<br>
-            <b>평점:</b> ⭐{row['평점']}
-        </div>
-        """
+# 최소 평점 설정
+min_rating = st.sidebar.slider("최소 평점 선택", 0.0, 5.0, 4.0, 0.1)
+
+# 4. 데이터 필터링
+filtered_df = df[
+    (df['자치구명'] == selected_gu) & 
+    (df['법정동명'] == selected_dong) & 
+    (df['평점'] >= min_rating)
+]
+
+# 5. 결과 화면 구성
+col1, col2 = st.columns([1, 2])
+
+with col1:
+    st.subheader(f"✅ {selected_gu} {selected_dong} 결과")
+    st.write(f"총 {len(filtered_df)}개의 식당이 검색되었습니다.")
+    st.dataframe(filtered_df[['상호', '평점', '전화번호']])
+
+with col2:
+    if not filtered_df.empty:
+        # 필터링된 데이터의 중심점으로 지도 시작
+        center = [filtered_df['lat'].mean(), filtered_df['lon'].mean()]
+        m = folium.Map(location=center, zoom_start=15)
+
+        for _, row in filtered_df.iterrows():
+            tooltip_html = f"""
+            <div style="width:200px">
+                <h4>{row['상호']}</h4>
+                <b>평점:</b> ⭐{row['평점']}<br>
+                <b>전화:</b> {row['전화번호']}
+            </div>
+            """
+            folium.Marker(
+                location=[row['lat'], row['lon']],
+                tooltip=folium.Tooltip(tooltip_html),
+                icon=folium.Icon(color='blue', icon='restaurant', prefix='fa')
+            ).add_to(m)
         
-        folium.Marker(
-            location=[row['lat'], row['lon']],
-            tooltip=folium.Tooltip(tooltip_html, sticky=False), # 커서 이동 시 사라짐
-            icon=folium.Icon(color='cadetblue', icon='cutlery', prefix='fa')
-        ).add_to(m)
-
-# 6. 결과 저장 및 확인
-m.save('restaurant_map.html')
-print("지도가 'restaurant_map.html'로 저장되었습니다.")
+        # 지도 표시
+        st_folium(m, width=800, height=500)
+    else:
+        st.warning("선택한 조건에 맞는 식당이 없습니다.")
