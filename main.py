@@ -12,18 +12,15 @@ st.markdown("""
     
     .stApp { background-color: #ffffff; }
     
-    /* 헤더 스타일 */
     .header-section {
         text-align: center;
         padding: 60px 0 40px 0;
-        background: #fff;
     }
     .main-title {
         font-family: 'Playfair Display', serif;
         font-size: 3.2rem;
         color: #111;
         letter-spacing: -1px;
-        margin-bottom: 10px;
     }
     .sub-title {
         font-family: 'Playfair Display', serif;
@@ -33,56 +30,46 @@ st.markdown("""
         margin-bottom: 50px;
     }
 
-    /* 행정구역 버튼 컨테이너 */
-    .filter-label {
-        text-align: center;
-        font-size: 0.7rem;
-        letter-spacing: 2px;
-        color: #bbb;
-        margin-bottom: 20px;
-        text-transform: uppercase;
-    }
-
-    /* 그리드 레이아웃: 스크롤 최소화 */
+    /* 그리드 레이아웃 */
     .restaurant-grid {
         display: grid;
-        grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+        grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
         gap: 30px;
         padding: 40px 0;
     }
 
-    /* 카드 디자인 */
     .res-card {
         border-bottom: 1px solid #eee;
-        padding: 20px 10px;
+        padding: 25px 15px;
         transition: all 0.3s;
     }
     .res-card:hover {
-        background-color: #fafafa;
+        background-color: #fdfdfd;
+        border-bottom: 1px solid #1a1a1a;
     }
     .res-name {
         font-family: 'Playfair Display', serif;
-        font-size: 1.5rem;
+        font-size: 1.6rem;
         color: #1a1a1a;
         margin-bottom: 8px;
     }
     .res-addr {
         font-family: 'Inter', sans-serif;
         font-size: 0.8rem;
-        color: #999;
+        color: #888;
         margin-bottom: 20px;
         line-height: 1.5;
     }
 
-    /* 버튼 스타일 */
+    /* 검색 링크 버튼 */
     .btn-link {
         display: inline-block;
         border: 1px solid #1a1a1a;
         color: #1a1a1a;
-        padding: 8px 20px;
+        padding: 10px 22px;
         text-decoration: none;
         font-size: 0.7rem;
-        letter-spacing: 1px;
+        letter-spacing: 1.5px;
         text-transform: uppercase;
         transition: 0.3s;
     }
@@ -91,23 +78,24 @@ st.markdown("""
         color: #fff !important;
     }
 
-    /* 스트림릿 버튼 커스텀 */
+    /* 행정구역 버튼 디자인 */
     div.stButton > button {
         border-radius: 0px;
-        border: 1px solid #eee;
+        border: 1px solid #f0f0f0;
         background-color: white;
         font-size: 0.8rem;
-        padding: 5px 10px;
-        color: #888;
+        color: #777;
+        width: 100%;
+        margin-bottom: 5px;
     }
-    div.stButton > button:active, div.stButton > button:focus {
-        border-color: #1a1a1a !important;
-        color: #1a1a1a !important;
+    div.stButton > button:hover {
+        border-color: #1a1a1a;
+        color: #1a1a1a;
     }
     </style>
     """, unsafe_allow_html=True)
 
-# 2. 데이터 로드 로직
+# 2. 데이터 로드 로직 (요청하신 컬럼 순서 반영)
 @st.cache_data
 def load_gourmet_data(file_name):
     try:
@@ -123,17 +111,21 @@ def load_gourmet_data(file_name):
         
         if df is None: return pd.DataFrame()
 
-        # [반영] 2번째 컬럼(index 1) = 식당명, 5번째 컬럼(index 4) = 지역명
+        # [요청 반영] 
+        # 1번째(index 0) = 식당정보/ID 
+        # 2번째(index 1) = 상호표기용
+        # 5번째(index 4) = 지역명 (행정구역 추출용)
+        info_idx = 0
         name_idx = 1
         area_idx = 4 if len(df.columns) > 4 else (len(df.columns) - 1)
         
-        # 슬림하게 필요한 데이터만 추출
         clean_df = pd.DataFrame({
+            '정보': df.iloc[:, info_idx],
             '상호': df.iloc[:, name_idx],
             '지역': df.iloc[:, area_idx]
         })
         
-        # '구' 정보 추출
+        # 행정구역(구) 추출
         clean_df['구'] = clean_df['지역'].apply(lambda x: str(x).split()[0] if pd.notna(x) else "서울")
         
         return clean_df.dropna(subset=['상호']).reset_index(drop=True)
@@ -142,7 +134,7 @@ def load_gourmet_data(file_name):
 
 df = load_gourmet_data("restaurants.csv")
 
-# 3. 메인 화면 구성
+# 3. 화면 레이아웃
 st.markdown("""
     <div class='header-section'>
         <div class='main-title'>SEOUL GOURMET</div>
@@ -151,16 +143,15 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 if not df.empty:
-    # 4. 행정구역 선택 버튼 (가로형)
+    # 4. 행정구역 버튼 (가로형 배치)
     gu_list = sorted(df['구'].unique())
-    st.markdown("<div class='filter-label'>Select District</div>", unsafe_allow_html=True)
     
-    # 버튼 배치를 위한 컬럼 생성 (8개씩 배치)
+    # 8열로 배치하여 공간 효율화
     cols = st.columns(8)
     if 'selected_gu' not in st.session_state:
         st.session_state.selected_gu = gu_list[0]
 
-    for i, gu in enumerate(gu_list[:24]): # 최대 24개 구까지 버튼 표시
+    for i, gu in enumerate(gu_list):
         with cols[i % 8]:
             if st.button(gu):
                 st.session_state.selected_gu = gu
@@ -168,11 +159,11 @@ if not df.empty:
     # 5. 리스트 출력 (그리드 레이아웃)
     display_df = df[df['구'] == st.session_state.selected_gu].head(20)
     
-    st.markdown(f"<p style='margin-top:50px; font-weight:600; font-size:1.1rem; border-left: 3px solid #1a1a1a; padding-left:15px;'>{st.session_state.selected_gu}</p>", unsafe_allow_html=True)
+    st.markdown(f"<p style='margin-top:50px; font-weight:600; font-size:1.1rem; border-left: 3px solid #1a1a1a; padding-left:15px; letter-spacing:1px;'>{st.session_state.selected_gu} DISTRICT</p>", unsafe_allow_html=True)
     
     grid_html = '<div class="restaurant-grid">'
     for _, row in display_df.iterrows():
-        # 구글 검색 쿼리
+        # 검색 쿼리: 지역명 + 상호 조합
         query = urllib.parse.quote(f"{row['지역']} {row['상호']} 평점")
         google_url = f"https://www.google.com/search?q={query}"
         
@@ -180,7 +171,7 @@ if not df.empty:
             <div class="res-card">
                 <div class="res-name">{row['상호']}</div>
                 <div class="res-addr">{row['지역']}</div>
-                <a href="{google_url}" target="_blank" class="btn-link">Check Reviews</a>
+                <a href="{google_url}" target="_blank" class="btn-link">Explore Ratings</a>
             </div>
         """
     grid_html += '</div>'
@@ -188,4 +179,4 @@ if not df.empty:
     st.markdown(grid_html, unsafe_allow_html=True)
 
 else:
-    st.error("The gourmet database could not be reached. Please verify 'restaurants.csv'.")
+    st.error("데이터를 불러올 수 없습니다. GitHub의 restaurants.csv 파일을 확인해주세요.")
