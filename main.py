@@ -50,7 +50,7 @@ def load_and_clean_data(file_name):
         return pd.DataFrame()
 
 # 데이터 로드
-DATA_FILE = "서울관광재단_식당운영정보_20230111.csv"
+DATA_FILE = "restaurants.csv"
 df = load_and_clean_data(DATA_FILE)
 
 # 2. 메인 UI 구성
