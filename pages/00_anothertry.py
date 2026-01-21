@@ -1,4 +1,11 @@
 import streamlit as st
+import os
+
+# 현재 실행 중인 파일의 절대 경로를 화면에 표시
+st.write("현재 코드 저장 위치:", os.path.abspath(__file__))
+
+
+import streamlit as st
 import pandas as pd
 import requests
 import io
