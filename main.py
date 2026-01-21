@@ -1,4 +1,3 @@
-pip install pandas folium requests requests_cache
 
 import folium
 import pandas as pd
