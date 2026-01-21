@@ -4,98 +4,94 @@ import folium
 from streamlit_folium import st_folium
 from folium.plugins import MarkerCluster
 
-# 1. 페이지 레이아웃 설정
-st.set_page_config(
-    page_title="서울시 맛집 추천 시스템",
-    page_icon="🍴",
-    layout="wide"
-)
+# 1. 페이지 설정
+st.set_page_config(page_title="서울 맛집 추천", layout="wide")
 
-# [최적화 1] 데이터 로드 및 전처리 캐싱
+# [최적화 1] 데이터 로드 및 4점 미만 즉시 제거
 @st.cache_data
-def load_data(file_path):
-    # 필요한 컬럼만 지정 (메모리 절약)
-    # 실제 파일의 컬럼명에 맞춰 '상호명', '위도' 등을 수정하세요.
-    use_cols = ['상호명', '자치구명', '법정동명', '위도', '경도', '전화번호', '평점']
-    
+def load_optimized_data(file_path):
     try:
-        # 데이터 읽기
+        # 필요한 컬럼만 로드
+        use_cols = ['상호명', '자치구명', '법정동명', '위도', '경도', '전화번호', '평점']
         df = pd.read_csv(file_path, usecols=use_cols)
         
-        # [최적화 2] 평점 4점 미만 데이터는 읽어올 때 바로 삭제 (부하 감소)
+        # 평점 4.0 미만 데이터 삭제 (데이터 부하 최소화)
         df = df[df['평점'] >= 4.0].reset_index(drop=True)
-        
-        # 위도/경도 결측치 제거
         df = df.dropna(subset=['위도', '경도'])
-        
         return df
     except Exception as e:
-        st.error(f"데이터를 불러오는 중 오류가 발생했습니다: {e}")
+        st.error(f"파일 로드 오류: {e}")
         return pd.DataFrame()
 
 # 데이터 로드 (파일명 확인 필요)
-df = load_data("seoul_restaurants.csv")
+df = load_optimized_data("seoul_restaurants.csv")
 
-# 2. 사이드바 - 행정구역 선택 UI
+# 2. 사이드바 - 지역 선택
 st.sidebar.header("📍 지역 필터")
-
 if not df.empty:
-    # '구' 선택
     gu_list = sorted(df['자치구명'].unique())
-    selected_gu = st.sidebar.selectbox("자치구(구)를 선택하세요", gu_list)
+    selected_gu = st.sidebar.selectbox("구 선택", gu_list)
 
-    # 선택된 '구'에 속한 '동' 목록만 추출
     dong_list = sorted(df[df['자치구명'] == selected_gu]['법정동명'].unique())
-    selected_dong = st.sidebar.selectbox("법정동(동)을 선택하세요", dong_list)
+    selected_dong = st.sidebar.selectbox("동 선택", dong_list)
 
-    # 3. 데이터 필터링
+    # 선택 지역 데이터 필터링
     filtered_df = df[(df['자치구명'] == selected_gu) & (df['법정동명'] == selected_dong)]
+    filtered_df = filtered_df.sort_values(by='평점', ascending=False) # 평점순 정렬
 
-    # 4. 메인 화면 출력
-    st.title(f"🍴 {selected_gu} {selected_dong} 맛집 추천")
-    st.markdown(f"평점 **4.0 이상**인 식당 **{len(filtered_df)}개**를 찾았습니다.")
+    # 3. [핵심 기능] 페이지네이션 (20개씩 보여주기)
+    st.sidebar.markdown("---")
+    st.sidebar.write(f"총 검색 결과: {len(filtered_df)}개")
+    
+    rows_per_page = 20
+    total_pages = (len(filtered_df) // rows_per_page) + (1 if len(filtered_df) % rows_per_page > 0 else 0)
+    
+    if total_pages > 0:
+        current_page = st.sidebar.number_input(f"페이지 (총 {total_pages}P)", min_value=1, max_value=total_pages, step=1)
+        
+        # 현재 페이지에 해당하는 데이터만 추출
+        start_idx = (current_page - 1) * rows_per_page
+        end_idx = start_idx + rows_per_page
+        page_df = filtered_df.iloc[start_idx:end_idx]
+    else:
+        page_df = pd.DataFrame()
 
-    col1, col2 = st.columns([1, 2])
+    # 4. 메인 화면 구성
+    st.title(f"🍴 {selected_gu} {selected_dong} 맛집 (페이지 {current_page}/{total_pages})")
 
-    with col1:
-        st.subheader("📋 식당 리스트")
-        # 데이터프레임 표시 (불필요한 인덱스 제외)
-        st.dataframe(
-            filtered_df[['상호명', '평점', '전화번호']].sort_values(by='평점', ascending=False),
-            use_container_width=True,
-            height=550
-        )
+    if not page_df.empty:
+        col1, col2 = st.columns([1, 2])
 
-    with col2:
-        st.subheader("📍 지도 보기")
-        if not filtered_df.empty:
-            # 지도 초기화 (검색된 식당들의 중앙 좌표)
-            center_lat = filtered_df['위도'].mean()
-            center_lon = filtered_df['경도'].mean()
-            m = folium.Map(location=[center_lat, center_lon], zoom_start=15)
+        with col1:
+            st.subheader(f"📋 리스트 ({start_idx+1}~{min(end_idx, len(filtered_df))}위)")
+            st.dataframe(
+                page_df[['상호명', '평점', '전화번호']],
+                use_container_width=True,
+                height=500
+            )
 
-            # [최적화 3] 마커 클러스터링 적용 (지도 렌더링 속도 향상)
+        with col2:
+            st.subheader("📍 지도 표시")
+            # 지도 중심점 설정
+            m = folium.Map(location=[page_df['위도'].mean(), page_df['경도'].mean()], zoom_start=15)
             marker_cluster = MarkerCluster().add_to(m)
 
-            for _, row in filtered_df.iterrows():
-                # 툴팁 HTML 구성 (커서 올리면 표시됨)
+            for _, row in page_df.iterrows():
                 tooltip_html = f"""
-                <div style="font-family: 'Nanum Gothic', sans-serif; width: 180px;">
-                    <h5 style='margin-bottom:5px;'>{row['상호명']}</h5>
-                    <b>평점:</b> ⭐{row['평점']}<br>
-                    <b>전화:</b> {row['전화번호']}
+                <div style="width:180px;">
+                    <b>{row['상호명']}</b><br>
+                    평점: ⭐{row['평점']}<br>
+                    전화: {row['전화번호']}
                 </div>
                 """
-                
                 folium.Marker(
                     location=[row['위도'], row['경도']],
                     tooltip=folium.Tooltip(tooltip_html),
                     icon=folium.Icon(color='blue', icon='restaurant', prefix='fa')
                 ).add_to(marker_cluster)
 
-            # 지도 표시
-            st_folium(m, width="100%", height=550, returned_objects=[])
-        else:
-            st.info("해당 지역에 조건에 맞는 식당이 없습니다.")
+            st_folium(m, width="100%", height=500, key=f"map_{current_page}")
+    else:
+        st.info("선택한 지역에 평점 4점 이상의 식당이 없습니다.")
 else:
-    st.warning("데이터 파일이 없거나 형식이 잘못되었습니다.")
+    st.warning("데이터 파일을 찾을 수 없습니다.")
