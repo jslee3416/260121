@@ -3,145 +3,174 @@ import pandas as pd
 import urllib.parse
 import os
 
-# 1. 페이지 설정 및 프리미엄 스타일 적용
+# 1. 페이지 설정 (넓은 화면 사용)
 st.set_page_config(page_title="SEOUL GOURMET", layout="wide")
 
+# 고급스러운 콤팩트 UI 디자인 (CSS)
 st.markdown("""
     <style>
-    @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,700;1,400&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700&family=Inter:wght@400;500&display=swap');
     
     .stApp { background-color: #ffffff; }
     
+    .header-section {
+        text-align: center;
+        padding: 40px 0;
+        border-bottom: 1px solid #f0f0f0;
+        margin-bottom: 30px;
+    }
+    
     .main-title {
         font-family: 'Playfair Display', serif;
-        font-size: 3.5rem;
-        color: #111111;
-        text-align: center;
-        margin-top: 2rem;
+        font-size: 2.8rem;
+        color: #111;
         letter-spacing: -1px;
     }
-    .sub-title {
+
+    /* 그리드 레이아웃: 한 줄에 여러 개 표시하여 스크롤 단축 */
+    .restaurant-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+        gap: 25px;
+        padding: 20px 0;
+    }
+
+    .res-card {
+        border: 1px solid #eeeeee;
+        padding: 25px;
+        border-radius: 0px; /* 미니멀한 직각 디자인 */
+        transition: all 0.3s ease;
+        background: #fff;
+    }
+    
+    .res-card:hover {
+        border-color: #1a1a1a;
+        box-shadow: 0 10px 20px rgba(0,0,0,0.05);
+    }
+
+    .res-name {
         font-family: 'Playfair Display', serif;
-        font-style: italic;
-        text-align: center;
-        color: #888888;
-        margin-bottom: 4rem;
-        font-size: 1.1rem;
-    }
-    .restaurant-card {
-        border-bottom: 1px solid #eeeeee;
-        padding: 50px 0;
-        max-width: 800px;
-        margin: 0 auto;
-        text-align: center;
-    }
-    .location-tag {
-        font-size: 0.8rem;
-        color: #b59d5f; /* 골드 톤 포인트 */
-        letter-spacing: 2px;
-        text-transform: uppercase;
-        margin-bottom: 15px;
-    }
-    .restaurant-name {
-        font-family: 'Playfair Display', serif;
-        font-size: 2.2rem;
+        font-size: 1.4rem;
         color: #1a1a1a;
-        margin-bottom: 25px;
+        margin-bottom: 8px;
     }
-    .btn-explore {
+
+    .res-addr {
+        font-family: 'Inter', sans-serif;
+        font-size: 0.8rem;
+        color: #999;
+        margin-bottom: 20px;
+        letter-spacing: 0.5px;
+        line-height: 1.4;
+    }
+
+    .btn-link {
         display: inline-block;
         border: 1px solid #1a1a1a;
         color: #1a1a1a;
-        padding: 12px 30px;
+        padding: 10px 20px;
         text-decoration: none;
-        font-size: 0.75rem;
-        letter-spacing: 1.5px;
-        transition: 0.4s;
+        font-size: 0.7rem;
+        font-weight: 500;
+        letter-spacing: 1px;
         text-transform: uppercase;
+        transition: 0.3s;
     }
-    .btn-explore:hover {
+    
+    .btn-link:hover {
         background-color: #1a1a1a;
         color: #ffffff !important;
+    }
+
+    /* 구 선택 버튼 스타일 */
+    div.stButton > button {
+        border-radius: 0px;
+        border: 1px solid #eee;
+        background-color: white;
+        color: #666;
+        width: 100%;
+        font-size: 0.8rem;
+    }
+    div.stButton > button:hover {
+        border-color: #1a1a1a;
+        color: #1a1a1a;
     }
     </style>
     """, unsafe_allow_html=True)
 
-DATA_FILE = "restaurants.csv"
-
+# 2. 데이터 로딩 (인덱스 기반 안정화 버전)
 @st.cache_data
 def load_gourmet_data(file_name):
     try:
         current_dir = os.path.dirname(os.path.abspath(__file__))
         file_path = os.path.join(current_dir, file_name)
         
-        if not os.path.exists(file_path):
-            return pd.DataFrame()
-
-        # [안정화 로직] 인코딩 및 엔진 설정 강화
         df = None
-        for enc in ['utf-8-sig', 'cp949', 'utf-8', 'euc-kr']:
+        for enc in ['utf-8-sig', 'cp949', 'utf-8']:
             try:
-                # low_memory=False로 타입 추론 오류 방지
                 df = pd.read_csv(file_path, encoding=enc, on_bad_lines='skip', low_memory=False)
-                if df is not None and not df.empty:
-                    # 컬럼명 앞뒤 공백 제거 및 문자열 변환
-                    df.columns = [str(c).strip() for c in df.columns]
-                    break
-            except:
-                continue
+                if df is not None and not df.empty: break
+            except: continue
         
-        if df is None or df.empty:
-            return pd.DataFrame()
+        if df is None: return pd.DataFrame()
 
-        # [위치 기반 매칭] 2번째 컬럼(식당명), 4번째 혹은 마지막(지역명)
-        # 만약 컬럼이 부족하면 에러 없이 안전하게 인덱스 조절
-        name_idx = 1 if len(df.columns) > 1 else 0
+        # 위치 기반 추출: 2번째 컬럼(상호), 5번째(지역)
+        name_idx = 1
         area_idx = 4 if len(df.columns) > 4 else (len(df.columns) - 1)
         
         new_df = pd.DataFrame({
             '상호': df.iloc[:, name_idx],
             '지역': df.iloc[:, area_idx]
         })
-        
-        # '구' 추출 로직
-        new_df['구'] = new_df['지역'].apply(lambda x: str(x).split()[0] if pd.notna(x) else "SEOUL")
+        new_df['구'] = new_df['지역'].apply(lambda x: str(x).split()[0] if pd.notna(x) else "서울")
         
         return new_df.dropna(subset=['상호']).reset_index(drop=True)
-    except Exception as e:
-        st.sidebar.error(f"System Load Error: {e}")
+    except:
         return pd.DataFrame()
 
-# 데이터 로드
-df = load_gourmet_data(DATA_FILE)
+df = load_gourmet_data("restaurants.csv")
 
-# 2. 메인 UI 출력
-st.markdown("<div class='main-title'>SEOUL GOURMET</div>", unsafe_allow_html=True)
-st.markdown("<div class='sub-title'>Fine Dining & Exceptional Taste</div>", unsafe_allow_html=True)
+# 3. 상단 헤더
+st.markdown("<div class='header-section'><div class='main-title'>SEOUL GOURMET</div></div>", unsafe_allow_html=True)
 
 if not df.empty:
-    # 사이드바: DISTRICT SELECTOR
-    st.sidebar.markdown("<p style='letter-spacing:2px; font-size:0.8rem; color:#888;'>CHOOSE DISTRICT</p>", unsafe_allow_html=True)
+    # 4. 행정구역 선택 버튼 (가로 배치)
     gu_list = sorted(df['구'].unique())
-    selected_gu = st.sidebar.selectbox("", gu_list, label_visibility="collapsed")
     
-    # 해당 구 상위 20개 리스팅
-    filtered_df = df[df['구'] == selected_gu].head(20)
+    st.markdown("<p style='text-align:center; font-size:0.7rem; letter-spacing:2px; color:#bbb; margin-bottom:15px;'>SELECT DISTRICT</p>", unsafe_allow_html=True)
+    
+    # 구 버튼을 8열씩 배치하여 화면 공간 절약
+    cols = st.columns(8)
+    if 'selected_gu' not in st.session_state:
+        st.session_state.selected_gu = gu_list[0]
 
-    # 3. 고급스러운 리스트 출력 (미니멀 텍스트 중심)
-    for _, row in filtered_df.iterrows():
-        # 검색 쿼리: 주소 + 상호 + 평점
-        search_query = f"{row['지역']} {row['상호']} 평점"
-        google_url = f"https://www.google.com/search?q={urllib.parse.quote(search_query)}"
+    for i, gu in enumerate(gu_list[:16]): # 주요 16개 구 버튼 생성
+        with cols[i % 8]:
+            if st.button(gu):
+                st.session_state.selected_gu = gu
+
+    # 5. 그리드 레이아웃 출력 (카드형)
+    display_df = df[df['구'] == st.session_state.selected_gu].head(20)
+    
+    st.markdown(f"<p style='margin-top:40px; font-size:0.9rem; font-weight:bold;'>{st.session_state.selected_gu} EXPLORATION</p>", unsafe_allow_html=True)
+    
+    # HTML 그리드 생성
+    grid_html = '<div class="restaurant-grid">'
+    for _, row in display_df.iterrows():
+        # 검색 쿼리: 지역 + 상호 + 평점
+        query = urllib.parse.quote(f"{row['지역']} {row['상호']} 평점")
+        google_url = f"https://www.google.com/search?q={query}"
         
-        st.markdown(f"""
-            <div class="restaurant-card">
-                <div class="location-tag">{row['지역']}</div>
-                <div class="restaurant-name">{row['상호']}</div>
-                <a href="{google_url}" target="_blank" class="btn-explore">
-                    View Ratings & Reviews
-                </a>
+        grid_html += f"""
+            <div class="res-card">
+                <div class="res-name">{row['상호']}</div>
+                <div class="res-addr">{row['지역']}</div>
+                <a href="{google_url}" target="_blank" class="btn-link">Check Ratings & Reviews</a>
             </div>
-            """, unsafe_allow_html=True)
+        """
+    grid_html += '</div>'
+    
+    st.markdown(grid_html, unsafe_allow_html=True)
+
 else:
-    st.error("The gourmet database is currently unavailable.")
-    st.info("Check if 'restaurants.csv' exists in the repository.")
+    st.error("데이터를 불러올 수 없습니다. 파일명을 확인해 주세요.")
