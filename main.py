@@ -30,7 +30,7 @@ st.markdown("""
         margin-bottom: 50px;
     }
 
-    /* 그리드 레이아웃 */
+    /* 그리드 레이아웃: 한 줄에 여러 개 배치 */
     .restaurant-grid {
         display: grid;
         grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
@@ -61,7 +61,7 @@ st.markdown("""
         line-height: 1.5;
     }
 
-    /* 검색 링크 버튼 */
+    /* 구글 평점 연결 버튼 */
     .btn-link {
         display: inline-block;
         border: 1px solid #1a1a1a;
@@ -78,7 +78,7 @@ st.markdown("""
         color: #fff !important;
     }
 
-    /* 행정구역 버튼 디자인 */
+    /* 행정구역 버튼 스타일 */
     div.stButton > button {
         border-radius: 0px;
         border: 1px solid #f0f0f0;
@@ -95,7 +95,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# 2. 데이터 로드 로직 (요청하신 컬럼 순서 반영)
+# 2. 데이터 로드 로직 (2번 열: 식당명, 4번 열: 지역명)
 @st.cache_data
 def load_gourmet_data(file_name):
     try:
@@ -112,20 +112,17 @@ def load_gourmet_data(file_name):
         if df is None: return pd.DataFrame()
 
         # [요청 반영] 
-        # 1번째(index 0) = 식당정보/ID 
-        # 2번째(index 1) = 상호표기용
-        # 5번째(index 4) = 지역명 (행정구역 추출용)
-        info_idx = 0
+        # 2번째 열(index 1) = 식당명 (구글맵 연동 및 화면 표기)
+        # 4번째 열(index 3) = 지역명 (행정구역 선택 기준)
         name_idx = 1
-        area_idx = 4 if len(df.columns) > 4 else (len(df.columns) - 1)
+        area_idx = 3 # 4번째 열
         
         clean_df = pd.DataFrame({
-            '정보': df.iloc[:, info_idx],
             '상호': df.iloc[:, name_idx],
             '지역': df.iloc[:, area_idx]
         })
         
-        # 행정구역(구) 추출
+        # 행정구역(구) 추출: 지역명 컬럼의 첫 단어를 사용
         clean_df['구'] = clean_df['지역'].apply(lambda x: str(x).split()[0] if pd.notna(x) else "서울")
         
         return clean_df.dropna(subset=['상호']).reset_index(drop=True)
@@ -143,11 +140,10 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 if not df.empty:
-    # 4. 행정구역 버튼 (가로형 배치)
+    # 4. 행정구역 선택 버튼 (가로형 배치)
     gu_list = sorted(df['구'].unique())
     
-    # 8열로 배치하여 공간 효율화
-    cols = st.columns(8)
+    cols = st.columns(8) # 8열 배치
     if 'selected_gu' not in st.session_state:
         st.session_state.selected_gu = gu_list[0]
 
@@ -163,9 +159,9 @@ if not df.empty:
     
     grid_html = '<div class="restaurant-grid">'
     for _, row in display_df.iterrows():
-        # 검색 쿼리: 지역명 + 상호 조합
-        query = urllib.parse.quote(f"{row['지역']} {row['상호']} 평점")
-        google_url = f"https://www.google.com/search?q={query}"
+        # 검색 쿼리: 식당명(2번 열) + 지역명(4번 열) 조합으로 구글맵 검색 정확도 향상
+        query_text = f"{row['지역']} {row['상호']} 평점"
+        google_url = f"https://www.google.com/search?q={urllib.parse.quote(query_text)}"
         
         grid_html += f"""
             <div class="res-card">
@@ -179,4 +175,4 @@ if not df.empty:
     st.markdown(grid_html, unsafe_allow_html=True)
 
 else:
-    st.error("데이터를 불러올 수 없습니다. GitHub의 restaurants.csv 파일을 확인해주세요.")
+    st.error("데이터를 불러올 수 없습니다. GitHub의 restaurants.csv 파일 구성을 확인해주세요.")
