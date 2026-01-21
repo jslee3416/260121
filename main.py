@@ -4,24 +4,41 @@ import folium
 from streamlit_folium import st_folium
 from folium.plugins import MarkerCluster
 
-# 1. 페이지 설정
-st.set_page_config(page_title="서울 맛집 추천", layout="wide")
 
-# [최적화 1] 데이터 로드 및 4점 미만 즉시 제거
+# 기존 코드 수정
 @st.cache_data
 def load_optimized_data(file_path):
     try:
-        # 필요한 컬럼만 로드
         use_cols = ['상호명', '자치구명', '법정동명', '위도', '경도', '전화번호', '평점']
-        df = pd.read_csv(file_path, usecols=use_cols)
         
-        # 평점 4.0 미만 데이터 삭제 (데이터 부하 최소화)
+        # [수정된 부분] encoding='cp949'를 추가하여 한글 깨짐 방지
+        try:
+            df = pd.read_csv(file_path, usecols=use_cols, encoding='utf-8')
+        except UnicodeDecodeError:
+            df = pd.read_csv(file_path, usecols=use_cols, encoding='cp949') # 엑셀 한글 표준
+            
         df = df[df['평점'] >= 4.0].reset_index(drop=True)
         df = df.dropna(subset=['위도', '경도'])
         return df
     except Exception as e:
-        st.error(f"파일 로드 오류: {e}")
+        st.error(f"데이터 로드 오류: {e}")
         return pd.DataFrame()
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# 1. 페이지 설정
+
 
 # 데이터 로드 (파일명 확인 필요)
 df = load_optimized_data("서울관광재단_식당운영정보_20230111.csv")
