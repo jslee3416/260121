@@ -7,131 +7,86 @@ import urllib.parse
 # 1. 페이지 설정
 st.set_page_config(page_title="서울 맛집 TOP 20", layout="wide")
 
-# [수정 완료] 보내주신 링크에서 추출한 파일 ID
+# 구글 드라이브 파일 ID
 GOOGLE_FILE_ID = '15qLFBk-cWaGgGxe2sPz_FdgeYpquhQa4'
 
 @st.cache_data(show_spinner=False)
-def load_data_from_gdrive(file_id):
-    # 구글 드라이브 대용량 파일 다운로드를 위한 세션 및 토큰 처리
-    def get_confirm_token(response):
-        for key, value in response.cookies.items():
-            if key.startswith('download_warning'):
-                return value
-        return None
-
-    URL = "https://docs.google.com/uc?export=download"
+def load_data_robust(file_id):
+    URL = f"https://docs.google.com/uc?export=download&id={file_id}"
     session = requests.Session()
     
     try:
-        # 1차 시도: 토큰 확인
-        response = session.get(URL, params={'id': file_id}, stream=True, timeout=30)
-        token = get_confirm_token(response)
-
-        # 2차 시도: 토큰이 있다면 포함해서 재요청
-        if token:
-            params = {'id': file_id, 'confirm': token}
-            response = session.get(URL, params=params, stream=True)
+        # 구글 드라이브 대용량 파일은 '바이러스 검사 불가' 경고가 뜰 수 있어 2번 시도합니다.
+        response = session.get(URL, stream=True, timeout=60)
         
-        # 권한 오류 체크 (응답이 HTML이면 권한 문제)
-        if "html" in response.headers.get('Content-Type', '').lower():
-            return "AUTH_ERROR"
-
-        # 파일 읽기 (인코딩 및 파싱 에러 방지)
-        content = response.content
+        # 인코딩 후보군 (한국 공공데이터는 대부분 이 중 하나입니다)
+        # cp949(윈도우 한글), utf-8-sig(BOM 포함 UTF8), euc-kr(확장 한글)
         for enc in ['cp949', 'utf-8-sig', 'euc-kr']:
             try:
-                # 메모리 효율을 위해 필요한 컬럼만 지정 (4, 9, 10, 19번째)
+                # [중요] 필요한 컬럼만 지정하고 데이터 타입을 문자열(str)로 강제하여 파싱 오류 방지
+                # 4번째(3:상태), 9번째(8:이름), 10번째(9:업종), 19번째(18:주소)
                 df = pd.read_csv(
-                    io.BytesIO(content),
+                    io.BytesIO(response.content),
                     encoding=enc,
                     usecols=[3, 8, 9, 18],
-                    on_bad_lines='skip',
-                    low_memory=False
+                    on_bad_lines='skip',  # 깨진 행 무시
+                    low_memory=False,     # 대용량 처리 안정성
+                    dtype=str             # 모든 열을 일단 텍스트로 읽음
                 )
                 
-                # 컬럼명 통일
+                # 컬럼 이름 재정의
                 df.columns = ['status', 'name', 'category', 'address']
                 
-                # [요구사항 1] 4번째 컬럼에서 '폐업'인 데이터 삭제
+                # [요구사항] '폐업' 데이터 삭제
+                # 결측치를 제거하고 '폐업' 글자가 없는 행만 필터링
                 df = df[~df['status'].fillna('').str.contains("폐업|취소|말소")].copy()
                 
-                return df
-            except:
+                # 데이터가 정상적으로 읽혔다면 반복문 종료
+                if not df.empty:
+                    return df
+            except Exception:
                 continue
                 
-        return "PARSE_ERROR"
+        return "데이터의 인코딩을 해석할 수 없습니다. (UTF-8/CP949 모두 실패)"
         
     except Exception as e:
-        return f"SYSTEM_ERROR: {str(e)}"
+        return f"서버 연결 실패: {str(e)}"
 
 # --- 메인 인터페이스 ---
 st.title("🍴 서울시 실시간 맛집 추천 가이드")
-st.markdown("구글 지도의 실시간 평점과 위치 정보를 연동하여 상위 20개 식당을 보여줍니다.")
 
-# 데이터 로딩 시작
-with st.spinner('데이터를 분석 중입니다. 대용량 파일이라 처음 로딩 시 10초 정도 소요될 수 있습니다...'):
-    data = load_data_from_gdrive(GOOGLE_FILE_ID)
+with st.spinner('대용량 데이터를 분석 중입니다. 잠시만 기다려 주세요...'):
+    data = load_data_robust(GOOGLE_FILE_ID)
 
-# 에러 처리 및 결과 출력
-if data is "AUTH_ERROR":
-    st.error("❌ 구글 드라이브 권한 에러")
-    st.info("파일의 공유 설정이 '링크가 있는 모든 사용자'로 되어 있는지 다시 확인해 주세요.")
-elif data is "PARSE_ERROR":
-    st.error("❌ 데이터 파싱 실패 (인코딩 문제)")
-elif isinstance(data, str):
+if isinstance(data, str):
     st.error(data)
+    st.markdown("⚠️ **공유 권한이 맞는데도 안 된다면?**")
+    st.write("1. 파일이 .csv 인지 다시 확인해주세요. (.xlsx라면 코드가 다릅니다)")
+    st.write("2. 구글 드라이브에서 '다운로드'가 금지되어 있는지 확인해주세요.")
 else:
-    st.success(f"✅ 영업 중인 식당 {len(data):,}개를 성공적으로 불러왔습니다.")
+    st.success(f"✅ {len(data):,}개의 식당 정보를 불러왔습니다.")
 
-    # [요구사항 2] 10번째 컬럼(category) 기반으로 업종 선택 LoV 생성
+    # 카테고리 LoV 생성
     category_list = sorted(data['category'].dropna().unique().tolist())
-    
-    col_sel, col_empty = st.columns([1, 2])
-    with col_sel:
-        selected_category = st.selectbox("🍱 어떤 업종을 찾으시나요?", ["전체 보기"] + category_list)
+    selected_category = st.selectbox("🍱 음식 종류를 선택하세요", ["전체"] + category_list)
 
-    # 필터링 적용
-    filtered_df = data if selected_category == "전체 보기" else data[data['category'] == selected_category]
+    filtered_df = data if selected_category == "전체" else data[data['category'] == selected_category]
 
     st.divider()
-    st.subheader(f"📍 '{selected_category}' 추천 리스트 TOP 20")
+    st.subheader(f"📍 '{selected_category}' 추천 맛집 TOP 20")
 
-    # [요구사항 3] 상위 20개 추출 및 구글맵/평점 연동
-    top_20 = filtered_df.head(20)
-    
-    if len(top_20) > 0:
-        for i, row in top_20.iterrows():
-            # 검색 및 지도 쿼리
-            search_query = urllib.parse.quote(f"서울 {row['name']} {row['category']} 평점 리뷰")
-            map_query = urllib.parse.quote(f"{row['name']} {row['address']}")
-            
-            with st.container():
-                c1, c2 = st.columns([3, 1])
-                with c1:
-                    # 9번째 컬럼에서 추출된 식당명 표기
-                    st.markdown(f"### {row['name']}")
-                    st.write(f"📂 **업종**: {row['category']} | ✅ **상태**: {row['status']}")
-                    st.caption(f"📍 **주소**: {row['address'] if pd.notna(row['address']) else '주소 정보가 없습니다.'}")
-                
-                with c2:
-                    st.write("") # 수직 정렬용
-                    # 평점 확인 버튼
-                    st.markdown(f"""
-                        <a href="https://www.google.com/search?q={search_query}" target="_blank">
-                            <button style="width:100%; padding:10px; background-color:#4285F4; color:white; border:none; border-radius:5px; cursor:pointer; margin-bottom:10px;">
-                                ⭐ 평점/리뷰 확인
-                            </button>
-                        </a>
-                    """, unsafe_allow_html=True)
-                    
-                    # 지도 보기 버튼
-                    st.markdown(f"""
-                        <a href="https://www.google.com/maps/search/?api=1&query={map_query}" target="_blank">
-                            <button style="width:100%; padding:10px; background-color:#34A853; color:white; border:none; border-radius:5px; cursor:pointer;">
-                                📍 상세 위치 보기
-                            </button>
-                        </a>
-                    """, unsafe_allow_html=True)
-                st.divider()
-    else:
-        st.warning("선택하신 분류에 해당하는 데이터가 없습니다.")
+    # 상위 20개 출력 및 구글맵 연동
+    for i, row in filtered_df.head(20).iterrows():
+        # 검색 쿼리: 식당명 + 업종 + 평점/리뷰
+        search_q = f"서울 {row['name']} {row['category']} 평점 리뷰"
+        map_q = f"{row['name']} {row['address']}"
+        
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            st.markdown(f"### {row['name']}")
+            st.write(f"📂 {row['category']} | 📍 {row['address']}")
+        with col2:
+            st.write("") # 간격 조절
+            st.markdown(f"[⭐ 평점 확인](https://www.google.com/search?q={urllib.parse.quote(search_q)})")
+            st.markdown(f"[📍 상세 위치](https://www.google.com/maps/search/{urllib.parse.quote(map_q)})")
+        st.divider()
