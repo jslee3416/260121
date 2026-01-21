@@ -17,15 +17,15 @@ def load_and_clean_data(file_name):
             st.error(f"파일 없음: {file_name}")
             return pd.DataFrame()
 
-        # 1. 인코딩 및 구분자 자동 감지 로직
+        # 1. 인코딩 시도 (한글 깨짐 방지 최적화)
         df = None
-        for enc in ['cp949', 'utf-8', 'euc-kr', 'utf-8-sig']:
+        for enc in ['cp949', 'utf-8-sig', 'utf-8', 'euc-kr']:
             try:
-                # sep=None, engine='python'은 쉼표/탭/세미콜론 자동 감지
-                df = pd.read_csv(file_path, encoding=enc, sep=None, engine='python')
+                # 구분자 자동 감지 및 공백 제거(skipinitialspace) 적용
+                df = pd.read_csv(file_path, encoding=enc, sep=None, engine='python', skipinitialspace=True)
                 if df is not None and not df.empty:
-                    # 빈 칸(Unnamed) 컬럼 제거 및 정리
-                    df = df.loc[:, ~df.columns.str.contains('^Unnamed')]
+                    # 컬럼명의 앞뒤 공백 제거
+                    df.columns = df.columns.str.strip()
                     break
             except:
                 continue
@@ -33,31 +33,27 @@ def load_and_clean_data(file_name):
         if df is None or df.empty:
             return pd.DataFrame()
 
-        # [진단용] 실제 파일의 컬럼명을 사용자에게 보여줌
-        actual_columns = df.columns.tolist()
-        st.sidebar.info(f"🔍 파일 내 실제 컬럼명: {actual_columns}")
+        # [디버깅 정보] 사이드바에 실제 읽어온 컬럼명을 출력합니다.
+        st.sidebar.info(f"📂 감지된 컬럼명: {df.columns.tolist()}")
 
-        # 2. 유연한 컬럼 매칭 (이름이 조금 달라도 찾아냄)
-        # 상호명 후보: 식당명, 상호명, 상호, 업소명, 식당(ID)
-        # 지역명 후보: 지역명, 지역, 주소, 소재지, 자치구명
-        name_map = {}
-        cols = df.columns
+        # 2. 식당명 컬럼 타겟팅
+        # '식당명'을 최우선으로 찾고, 없으면 유사한 이름을 찾습니다.
+        target_name_col = next((c for c in df.columns if c == '식당명'), 
+                          next((c for c in df.columns if '식당' in c or '상호' in c), df.columns[0]))
         
-        name_map['상호'] = next((c for c in cols if c in ['식당명', '상호명', '상호', '업소명', '식당(ID)']), None)
-        name_map['지역'] = next((c for c in cols if c in ['지역명', '지역', '주소', '소재지', '자치구명', '지역명 ']), None)
-        name_map['메뉴'] = next((c for c in cols if c in ['대표메뉴명', '대표메뉴', '메뉴', '주요메뉴']), None)
-
-        # 필수 컬럼(상호, 지역)이 없으면 첫 번째, 두 번째 컬럼을 강제로 할당
-        if not name_map['상호']: name_map['상호'] = cols[0]
-        if not name_map['지역']: name_map['지역'] = cols[1] if len(cols) > 1 else cols[0]
+        target_area_col = next((c for c in df.columns if '지역' in c or '주소' in c), 
+                          df.columns[1] if len(df.columns) > 1 else df.columns[0])
+        
+        target_menu_col = next((c for c in df.columns if '메뉴' in c), None)
 
         # 데이터 재구성
-        final_cols = [v for v in name_map.values() if v is not None]
-        inv_map = {v: k for k, v in name_map.items() if v is not None}
+        rename_dict = {target_name_col: '상호', target_area_col: '지역'}
+        if target_menu_col:
+            rename_dict[target_menu_col] = '메뉴'
+            
+        df = df[list(rename_dict.keys())].rename(columns=rename_dict)
         
-        df = df[final_cols].rename(columns=inv_map)
-        
-        # 3. 행정구역 분리
+        # 3. 행정구역(구/동) 분리 로직
         def split_region(x):
             if pd.isna(x): return "미분류", "미분류"
             parts = str(x).strip().split()
@@ -67,7 +63,7 @@ def load_and_clean_data(file_name):
 
         df[['구', '동']] = df['지역'].apply(lambda x: pd.Series(split_region(x)))
         
-        return df.reset_index(drop=True)
+        return df.dropna(subset=['상호']).reset_index(drop=True)
         
     except Exception as e:
         st.error(f"데이터 처리 오류: {e}")
@@ -79,7 +75,7 @@ df = load_and_clean_data(DATA_FILE)
 st.title("🍴 서울 맛집 실시간 평점 가이드")
 
 if not df.empty:
-    st.sidebar.success("✅ 데이터를 성공적으로 불러왔습니다!")
+    st.sidebar.success("✅ '식당명' 데이터를 성공적으로 연결했습니다!")
     
     # 지역 필터
     gu_list = sorted(df['구'].unique())
@@ -91,6 +87,11 @@ if not df.empty:
     filtered_df = df[df['구'] == selected_gu]
     if selected_dong != "전체":
         filtered_df = filtered_df[filtered_df['동'] == selected_dong]
+
+    # 검색 기능
+    search_query = st.sidebar.text_input("🔍 식당 이름 검색", "")
+    if search_query:
+        filtered_df = filtered_df[filtered_df['상호'].str.contains(search_query, na=False)]
 
     st.subheader(f"📍 {selected_gu} {selected_dong if selected_dong != '전체' else ''} 맛집 목록")
 
@@ -109,11 +110,14 @@ if not df.empty:
         st.markdown("| :--- | :--- | :--- | :--- |")
         
         for i, (_, row) in enumerate(page_data.iterrows()):
-            query = urllib.parse.quote(f"{row['구']} {row['동']} {row['상호']}")
-            google_url = f"https://www.google.com/maps/search/{query}"
-            st.markdown(f"| {start_idx + i + 1} | **{row['상호']}** | {row['구']} {row['동']} | [⭐ 평점 확인하기]({google_url}) |")
+            # 구글 검색 정확도를 위해 구+동+식당명 조합
+            search_query = f"{row['구']} {row['동']} {row['상호']}"
+            google_url = f"https://www.google.com/maps/search/{urllib.parse.quote(search_query)}"
+            
+            menu_info = f" ({row['메뉴']})" if '메뉴' in row and pd.notna(row['메뉴']) else ""
+            st.markdown(f"| {start_idx + i + 1} | **{row['상호']}**{menu_info} | {row['구']} {row['동']} | [⭐ 평점 확인하기]({google_url}) |")
     else:
-        st.warning("조건에 맞는 식당이 없습니다.")
+        st.warning("선택하신 조건에 해당하는 식당이 없습니다.")
 else:
-    st.error("데이터를 분석할 수 없습니다.")
-    st.info("사이드바에 표시된 '파일 내 실제 컬럼명'을 확인해 보세요.")
+    st.error("데이터를 불러올 수 없습니다.")
+    st.info("파일의 첫 줄에 '식당명'이라는 컬럼 제목이 있는지 확인해 주세요.")
