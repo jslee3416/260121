@@ -6,9 +6,9 @@ import urllib.parse
 # 1. 페이지 설정
 st.set_page_config(page_title="서울 맛집 검색 서비스", layout="wide")
 
-# 2. 경로 문제 해결: 실행 중인 .py 파일의 절대 경로를 계산하여 CSV 위치 지정
-current_dir = os.path.dirname(os.path.abspath(__file__))
-CSV_PATH = os.path.join(current_dir, "restaurantinseoul.csv")
+# 2. [수정포인트] 요청하신 다운로드 폴더 경로로 직접 설정
+# 경로 앞에 r을 붙여야 윈도우 경로의 백슬래시(\)가 올바르게 인식됩니다.
+CSV_PATH = r"C:\Users\jslee\Downloads\restaurantinseoul.csv"
 
 @st.cache_data
 def load_and_process_data(path):
@@ -57,21 +57,20 @@ def load_and_process_data(path):
 st.title("🍴 서울시 맛집 정보 서비스")
 
 # 사이드바 디버깅 정보
-st.sidebar.header("📁 시스템 정보")
-st.sidebar.info(f"앱 위치: {current_dir}")
-st.sidebar.info(f"찾는 파일: restaurantinseoul.csv")
+st.sidebar.header("📁 시스템 경로 확인")
+st.sidebar.code(CSV_PATH)
 
 # 데이터 로드 로직 시작
 if not os.path.exists(CSV_PATH):
-    st.error("❌ 'restaurantinseoul.csv' 파일을 찾을 수 없습니다.")
+    st.error(f"❌ '{CSV_PATH}' 파일을 찾을 수 없습니다.")
     st.markdown(f"""
     **해결 방법:**
-    1. 아래 경로에 파일이 실제로 있는지 확인해 주세요:
-       `{CSV_PATH}`
-    2. 파일명이 `restaurantinseoul.csv.csv`처럼 확장자가 중복되지 않았는지 확인하세요.
+    1. 다운로드 폴더(`C:\\Users\\jslee\\Downloads`)에 `restaurantinseoul.csv` 파일이 실제로 있는지 확인해 주세요.
+    2. 파일 확장자가 숨겨져서 `restaurantinseoul.csv.csv`처럼 되어있지는 않은지 확인하세요.
+    3. 현재 이 앱이 **로컬(내 컴퓨터)**에서 실행 중인지 확인하세요. (클라우드 배포 시 사용자의 C드라이브는 접근 불가합니다.)
     """)
 else:
-    with st.spinner('데이터를 분석 중입니다... (약 149MB)'):
+    with st.spinner('다운로드 폴더에서 데이터를 분석 중입니다...'):
         result = load_and_process_data(CSV_PATH)
 
     if isinstance(result, str):
@@ -80,16 +79,12 @@ else:
         df = result
         st.success(f"✅ 영업 중인 식당 {len(df):,}개를 로딩했습니다.")
 
-        # 10번째 컬럼(category) 기반 LoV (Selectbox) 생성
-        # 결측치를 제거하고 고유값만 추출하여 가나다순 정렬
+        # 10번째 컬럼(category) 기반 LoV 생성
         categories = sorted(df['category'].dropna().unique().tolist())
         selected_category = st.selectbox("🎯 음식 종류(업태)를 선택하세요", ["전체"] + categories)
 
-        # 카테고리 필터링
-        if selected_category == "전체":
-            final_df = df
-        else:
-            final_df = df[df['category'] == selected_category]
+        # 필터링 적용
+        final_df = df if selected_category == "전체" else df[df['category'] == selected_category]
 
         st.subheader(f"📍 '{selected_category}' 검색 결과 (최상위 20개)")
 
@@ -108,7 +103,6 @@ else:
                         st.write(f"**{i+1}. {row['name']}**")
                         st.caption(f"분류: {row['category']}")
                     with col2:
-                        # 평점 높은 순 정렬을 위해 구글 검색 연결
                         st.markdown(f"[⭐ 평점 확인]({google_url})")
                     st.divider()
         else:
