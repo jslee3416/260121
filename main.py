@@ -24,7 +24,7 @@ def load_optimized_data(file_path):
         return pd.DataFrame()
 
 # 데이터 로드 (파일명 확인 필요)
-df = load_optimized_data("seoul_restaurants.csv")
+df = load_optimized_data("서울관광재단_식당운영정보_20230111.csv")
 
 # 2. 사이드바 - 지역 선택
 st.sidebar.header("📍 지역 필터")
