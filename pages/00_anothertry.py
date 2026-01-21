@@ -3,92 +3,80 @@ import pandas as pd
 import os
 import urllib.parse
 
-# 페이지 설정
-st.set_page_config(page_title="서울 식당 분석 앱", layout="wide")
+st.set_page_config(page_title="서울 맛집 검색", layout="wide")
 
-# 1. 파일 경로 및 설정
-FILE_PATH = r"C:\Users\jslee\Downloads\restaurantinseoul.csv"
+# 1. 파일 경로 설정
+CSV_PATH = r"C:\Users\jslee\Downloads\restaurantinseoul.csv"
 
 @st.cache_data
-def load_and_process_data(path):
+def load_and_filter_data(path):
     if not os.path.exists(path):
         return None
     
-    # 메모리 절약을 위해 필요한 컬럼 인덱스만 먼저 정의
-    # 4번째(index 3), 9번째(index 8), 10번째(index 9) 등
-    # 실제 데이터의 컬럼 순서에 맞춰 index를 조정하세요.
+    container = []
+    # progress_bar로 진행 상황 시각화
+    progress_text = "데이터를 한 조각씩 불러오는 중입니다..."
+    my_bar = st.progress(0, text=progress_text)
+    
+    # [핵심] chunksize를 지정하여 데이터를 나누어 읽음 (메모리 과부하 방지)
+    # 149MB 기준 약 7~10개 조각으로 나누어 처리
+    total_chunks = 10 
+    
     try:
-        # 데이터 로딩
-        df = pd.read_csv(path, low_memory=False)
+        # 필요한 컬럼(3, 8, 9번)만 지정해서 읽기
+        reader = pd.read_csv(
+            path, 
+            usecols=[3, 8, 9], 
+            chunksize=20000, 
+            low_memory=False, 
+            encoding='cp949' # 한글 깨짐 방지 (필요 시 utf-8로 변경)
+        )
         
-        # 컬럼 이름이 명확하지 않을 수 있으므로 인덱스로 접근
-        # 컬럼 인덱스는 0부터 시작하므로:
-        # 4번째 컬럼: df.iloc[:, 3] (영업상태)
-        # 9번째 컬럼: df.iloc[:, 8] (사업장명)
-        # 10번째 컬럼: df.iloc[:, 9] (업태명/분류)
-        
-        status_col = df.columns[3]
-        name_col = df.columns[8]
-        category_col = df.columns[9]
-        
-        # (1) 4번째 컬럼에서 '폐업' 데이터 삭제 (영업 중인 데이터만 유지)
-        df = df[df[status_col].str.contains("영업|정상", na=False)]
-        df = df[~df[status_col].str.contains("폐업", na=False)]
-        
-        return df, name_col, category_col
+        for i, chunk in enumerate(reader):
+            # 컬럼명 통일
+            chunk.columns = ['status', 'name', 'category']
+            
+            # 읽자마자 '폐업' 데이터 삭제 (데이터 다이어트)
+            filtered_chunk = chunk[~chunk['status'].str.contains("폐업", na=False)].copy()
+            container.append(filtered_chunk)
+            
+            # 진행바 업데이트
+            progress = min((i + 1) / total_chunks, 1.0)
+            my_bar.progress(progress, text=f"{progress_text} ({i+1}번 조각 처리 중)")
+            
+        my_bar.empty() # 작업 완료 후 진행바 제거
+        return pd.concat(container, ignore_index=True)
+    
     except Exception as e:
-        st.error(f"데이터 처리 중 오류 발생: {e}")
-        return None, None, None
+        st.error(f"오류 발생: {e}")
+        return None
 
-# 2. 데이터 불러오기
-data_bundle = load_and_process_data(FILE_PATH)
-df, name_col, category_col = data_bundle
+# 2. 데이터 실행
+df = load_and_filter_data(CSV_PATH)
 
 if df is not None:
-    st.title("🍴 서울시 맛집 정보 조회 (영업 중)")
+    st.title("🍴 서울시 맛집 정보 서비스")
+    st.caption(f"영업 중인 식당 {len(df):,}개를 로딩 완료했습니다.")
 
-    # 3. 10번째 컬럼을 기반으로 LoV (Selectbox) 만들기
-    categories = sorted(df[category_col].unique().tolist())
-    selected_category = st.selectbox("🎯 음식 종류(업태)를 선택하세요", ["전체"] + categories)
+    # 3. LoV (10번째 컬럼이었던 'category')
+    categories = sorted(df['category'].unique().tolist())
+    selected_category = st.selectbox("🎯 음식 종류(업태)를 선택하세요", categories)
 
-    # 카테고리 필터링
-    if selected_category != "전체":
-        filtered_df = df[df[category_col] == selected_category]
-    else:
-        filtered_df = df
-
-    # 4. 구글 맵 연결 및 평점순 정렬 시뮬레이션
-    # 실제 CSV에는 구글 평점이 없을 가능성이 높으므로, 
-    # 구글 검색 링크를 생성하고 리스트를 보여줍니다.
-    
-    st.subheader(f"📍 '{selected_category}' 검색 결과 (Top 20)")
-    
-    # 상위 20개만 추출
-    top_20 = filtered_df.head(20).copy()
-    
-    # 구글 맵 검색 URL 생성 함수
-    def make_google_maps_link(row):
-        shop_name = row[name_col]
-        # '서울 사업장명'으로 검색 쿼리 생성
-        query = urllib.parse.quote(f"서울 {shop_name} 평점")
-        return f"https://www.google.com/maps/search/{query}"
-
-    # 결과 출력
-    for i, (idx, row) in enumerate(top_20.iterrows()):
-        col1, col2 = st.columns([3, 1])
-        shop_name = row[name_col]
-        map_url = make_google_maps_link(row)
+    # 4. 필터링 및 결과 출력
+    if selected_category:
+        result_df = df[df['category'] == selected_category].head(20)
         
-        with col1:
-            st.markdown(f"**{i+1}. {shop_name}** ({row[category_col]})")
-            # 주소 정보가 10번째 이후에 있다면 추가 표시 가능 (예: index 18~19번쯤의 도로명 주소)
-            # st.caption(f"주소: {row.iloc[18]}") 
+        st.subheader(f"📍 '{selected_category}' 검색 결과 Top 20")
+        
+        for i, row in result_df.iterrows():
+            # 구글 검색 링크 생성
+            query = urllib.parse.quote(f"서울 {row['name']} {selected_category} 평점")
+            search_url = f"https://www.google.com/search?q={query}"
             
-        with col2:
-            st.write(f"[⭐ 구글맵 확인]({map_url})")
-            
-    if len(top_20) == 0:
-        st.info("해당 조건의 데이터가 없습니다.")
-
+            with st.container():
+                col1, col2 = st.columns([4, 1])
+                col1.write(f"**{row['name']}**")
+                col2.markdown(f"[⭐ 평점확인]({search_url})")
+                st.divider() # 구분선
 else:
-    st.error("파일을 불러올 수 없습니다. 경로와 파일명을 확인해주세요.")
+    st.info("데이터 파일을 읽어오는 데 실패했습니다. 파일 경로를 확인해 주세요.")
