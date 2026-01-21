@@ -4,76 +4,93 @@ import requests
 import io
 import urllib.parse
 
-st.set_page_config(page_title="서울 맛집 데이터 진단", layout="wide")
+# 1. 페이지 설정
+st.set_page_config(page_title="서울 맛집 TOP 20", layout="wide")
 
+# 구글 드라이브 파일 ID (사용자 제공)
 GOOGLE_FILE_ID = '15qLFBk-cWaGgGxe2sPz_FdgeYpquhQa4'
 DIRECT_URL = f'https://drive.google.com/uc?export=download&id={GOOGLE_FILE_ID}'
 
 @st.cache_data(show_spinner=False)
-def load_and_diagnose(url):
+def load_and_process_data(url):
     try:
         response = requests.get(url)
         response.raise_for_status()
         
-        # 1. 인코딩 시도 및 전체 데이터 읽기 (상위 100줄만 우선 분석)
-        df = pd.read_csv(io.BytesIO(response.content), encoding='cp949', low_memory=False)
-        
-        # 2. [진단용] 모든 컬럼명과 인덱스 번호를 정리
-        col_info = [{"인덱스": i, "컬럼명": col, "샘플데이터": str(df[col].iloc[0])} for i, col in enumerate(df.columns)]
-        
-        return df, col_info
+        # 인코딩 시도
+        for enc in ['utf-8-sig', 'cp949']:
+            try:
+                df = pd.read_csv(io.BytesIO(response.content), encoding=enc, low_memory=False)
+                # 컬럼 선택: 4번째(상태), 9번째(식당명), 10번째(업태), 19번째(도로명주소 - 위치정보용)
+                # 주소 정보가 있는 19번째 컬럼(index 18)을 추가로 가져옵니다.
+                df_selected = df.iloc[:, [3, 8, 9, 18]].copy()
+                df_selected.columns = ['status', 'name', 'category', 'address']
+                
+                # 폐업 데이터 삭제
+                df_filtered = df_selected[~df_selected['status'].fillna('').str.contains("폐업")].copy()
+                return df_filtered
+            except:
+                continue
+        return "데이터 파싱 실패"
     except Exception as e:
-        return None, str(e)
+        return f"로드 실패: {str(e)}"
 
-# --- 메인 화면 ---
-st.title("🍴 서울시 맛집 데이터 진단 도구")
+# --- 메인 인터페이스 ---
+st.title("⭐ 서울시 분야별 추천 맛집 TOP 20")
+st.markdown("구글 맵 데이터와 연동하여 실시간 평점과 리뷰를 확인하세요.")
 
-with st.spinner('데이터 구조를 분석 중입니다...'):
-    df, info = load_and_diagnose(DIRECT_URL)
+with st.spinner('실시간 데이터를 분석 중입니다...'):
+    data = load_and_process_data(DIRECT_URL)
 
-if df is None:
-    st.error(f"데이터 로드 실패: {info}")
+if isinstance(data, str):
+    st.error(data)
 else:
-    # --- 1단계: 데이터 구조 보여주기 (개발자 도구 역할) ---
-    with st.expander("🔍 데이터 실제 구조 확인하기 (여기를 클릭해서 컬럼 번호를 확인하세요)"):
-        st.write("이 표를 보고 '영업상태', '사업장명', '업태명'이 몇 번 인덱스인지 확인해 주세요.")
-        st.table(info)
+    # 카테고리 LoV
+    category_list = sorted(data['category'].dropna().unique().tolist())
+    selected_category = st.selectbox("🍱 어떤 종류의 음식을 찾으시나요?", ["전체"] + category_list)
+
+    # 필터링
+    filtered_df = data if selected_category == "전체" else data[data['category'] == selected_category]
+
+    st.subheader(f"📍 '{selected_category}' 추천 리스트")
+    st.caption("※ '평점 확인' 링크 클릭 시 구글 지도의 최신 평점과 리뷰, 상세 위치를 확인할 수 있습니다.")
+
+    # 상위 20개 출력
+    top_20 = filtered_df.head(20)
     
-    # --- 2단계: 안전한 컬럼 추출 ---
-    # 사용자가 말한 4, 9, 10번째(인덱스 3, 8, 9)를 시도하되, 
-    # 데이터가 0개면 필터링을 풀고 원본을 보여줍니다.
-    try:
-        working_df = df.iloc[:, [3, 8, 9]].copy()
-        working_df.columns = ['status', 'name', 'category']
-        
-        # 필터링 전 원본 데이터 건수
-        total_count = len(working_df)
-        
-        # '폐업'이 포함되지 않은 것만 필터링 (필터링 조건을 아주 약하게 설정)
-        active_df = working_df[~working_df['status'].fillna('').str.contains("폐업|취소", na=False)].copy()
-        
-        st.success(f"✅ 전체 {total_count:,}개 중 '폐업' 제외 {len(active_df):,}개를 찾았습니다.")
-        
-        # --- 3단계: 카테고리 선택 및 결과 ---
-        categories = sorted(active_df['category'].dropna().unique().tolist())
-        
-        if not categories:
-            st.warning("⚠️ 카테고리(업종) 데이터를 찾을 수 없습니다. 컬럼 번호가 맞는지 위 표에서 확인하세요.")
-        else:
-            selected = st.selectbox("🎯 업종을 선택하세요", ["전체"] + categories)
+    if len(top_20) > 0:
+        for i, row in top_20.iterrows():
+            # 구글 검색용 쿼리 (평점 4.5 이상인 곳을 우선 탐색하도록 유도)
+            search_name = f"서울 {row['name']} {row['category']}"
             
-            final_df = active_df if selected == "전체" else active_df[active_df['category'] == selected]
+            # 1. 구글 지도/평점/리뷰 통합 검색 링크
+            google_search_url = f"https://www.google.com/search?q={urllib.parse.quote(search_name + ' 평점 리뷰')}"
             
-            st.subheader(f"📍 '{selected}' 결과 (상위 20개)")
-            for i, row in final_df.head(20).iterrows():
-                query = urllib.parse.quote(f"서울 {row['name']} {row['category']}")
-                url = f"https://www.google.com/search?q={query}"
+            # 2. 구글 맵 위치 전용 링크
+            google_map_url = f"https://www.google.com/maps/search/{urllib.parse.quote(search_name + ' ' + str(row['address']))}"
+            
+            with st.container():
+                c1, c2 = st.columns([3, 2])
+                with c1:
+                    st.markdown(f"### {i+1}. {row['name']}")
+                    st.write(f"📂 **분류**: {row['category']}")
+                    st.caption(f"📍 주소: {row['address'] if pd.notna(row['address']) else '정보 없음'}")
                 
-                col1, col2 = st.columns([4, 1])
-                col1.write(f"**{row['name']}**")
-                col1.caption(f"상태: {row['status']} | 업종: {row['category']}")
-                col2.markdown(f"[⭐ 구글검색]({url})")
+                with c2:
+                    st.write("") # 간격 조절
+                    # 버튼 형태로 링크 제공
+                    st.markdown(f"""
+                    <a href="{google_search_url}" target="_blank" style="text-decoration: none;">
+                        <button style="width:100%; border-radius:5px; background-color:#4285F4; color:white; border:none; padding:10px; margin-bottom:5px; cursor:pointer;">
+                            ⭐ 실시간 평점·리뷰 확인
+                        </button>
+                    </a>
+                    <a href="{google_map_url}" target="_blank" style="text-decoration: none;">
+                        <button style="width:100%; border-radius:5px; background-color:#34A853; color:white; border:none; padding:10px; cursor:pointer;">
+                            📍 구글 맵 위치 보기
+                        </a>
+                    """, unsafe_allow_html=True)
+                
                 st.divider()
-                
-    except Exception as e:
-        st.error(f"컬럼 추출 중 오류 발생: {e}. 데이터의 컬럼 수가 부족할 수 있습니다.")
+    else:
+        st.warning("조건에 맞는 식당이 없습니다.")
