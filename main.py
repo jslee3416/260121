@@ -6,6 +6,19 @@ import folium
 from streamlit_folium import folium_static
 from math import radians, cos, sin, asin, sqrt
 
+import streamlit as st
+
+st.set_page_config(page_title="서울 맛집 가이드", layout="wide", page_icon="🍴")
+
+st.title("🍴 서울시 고평점 식당 추천 서비스")
+st.markdown("---")
+st.subheader("이 앱은 다음과 같은 기능을 제공합니다:")
+st.write("1. **공공데이터 활용**: 서울관광재단의 신뢰할 수 있는 식당 정보를 불러옵니다.")
+st.write("2. **실시간 평점**: Google Maps API를 통해 현재 실제 고객 평점을 확인합니다.")
+st.write("3. **거리 및 평점 필터**: 내 주변 1km 이내, 3~5점 사이의 맛집만 골라냅니다.")
+
+st.info("👈 왼쪽 사이드바의 '추천 지도' 메뉴를 클릭하여 시작하세요!")
+
 # --- 1. API 키 및 설정 ---
 # 실제 발급받은 키로 교체하세요
 SEOUL_DATA_KEY = 'YOUR_PUBLIC_DATA_PORTAL_KEY'
