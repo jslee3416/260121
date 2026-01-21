@@ -3,8 +3,8 @@ import pandas as pd
 import urllib.parse
 import os
 
-# 1. 페이지 설정
-st.set_page_config(page_title="서울 맛집 평점 파인더", layout="wide")
+# 1. 페이지 레이아웃 및 제목 설정
+st.set_page_config(page_title="서울 맛집 구글 평점 파인더", layout="wide")
 
 @st.cache_data
 def load_and_clean_data(file_name):
@@ -12,11 +12,11 @@ def load_and_clean_data(file_name):
         current_dir = os.path.dirname(os.path.abspath(__file__))
         file_path = os.path.join(current_dir, file_name)
         
+        # 파일 존재 여부 확인
         if not os.path.exists(file_path):
-            st.error(f"파일을 찾을 수 없습니다: {file_name}")
             return pd.DataFrame()
         
-        # 인코딩 및 자동 구분자 감지
+        # 인코딩 처리 (CP949, UTF-8 순차 시도)
         df = None
         for enc in ['utf-8', 'cp949', 'euc-kr']:
             try:
@@ -29,88 +29,107 @@ def load_and_clean_data(file_name):
         if df is None or df.empty:
             return pd.DataFrame()
 
-        # [서울관광재단 데이터 컬럼 매칭]
-        # 식당명 -> 상호, 지역명 -> 지역, 대표메뉴명 -> 메뉴
+        # [컬럼 매칭] 서울관광재단 데이터 기준
         name_map = {
             '식당명': '상호',
             '지역명': '지역',
-            '대표메뉴명': '대표메뉴',
-            '영업시간내용': '영업시간',
-            '홈페이지(URL)': '홈페이지'
+            '대표메뉴명': '대표메뉴'
         }
         
         # 존재하는 컬럼만 선택하여 이름 변경
         existing_cols = [c for c in name_map.keys() if c in df.columns]
         df = df[existing_cols].rename(columns=name_map)
         
+        # [행정구역 분리] '지역' 컬럼에서 구와 동 추출
+        # 예: "강남구 역삼동" -> 구: 강남구, 동: 역삼동
+        def split_region(x):
+            if pd.isna(x): return "미분류", "미분류"
+            parts = str(x).split()
+            gu = parts[0] if len(parts) > 0 else "미분류"
+            dong = parts[1] if len(parts) > 1 else "전체"
+            return gu, dong
+
+        df[['구', '동']] = df['지역'].apply(lambda x: pd.Series(split_region(x)))
+        
         return df.reset_index(drop=True)
         
     except Exception as e:
-        st.error(f"데이터 처리 중 오류 발생: {e}")
+        st.error(f"데이터 로드 중 오류: {e}")
         return pd.DataFrame()
 
-# 데이터 로드
+# 요청하신 대로 데이터 파일명 수정
 DATA_FILE = "restaurants.csv"
 df = load_and_clean_data(DATA_FILE)
 
 # 2. 메인 UI 구성
-st.title("🍴 서울 맛집 실시간 평점 가이드")
-st.markdown("서울관광재단 인증 맛집 리스트입니다. **식당 이름을 클릭**하면 구글 맵 평점을 바로 확인할 수 있습니다.")
+st.title("🍴 서울 맛집 실시간 평점 탐색기")
+st.markdown("---")
 
 if not df.empty:
-    # 사이드바 지역 필터
+    # --- 사이드바: 행정구역 필터 ---
     st.sidebar.header("📍 지역 필터")
-    area_list = sorted(df['지역'].dropna().unique())
-    selected_area = st.sidebar.selectbox("지역을 선택하세요", ["전체"] + area_list)
     
-    # 데이터 필터링
-    if selected_area != "전체":
-        filtered_df = df[df['지역'] == selected_area]
+    # 구 선택
+    gu_list = sorted(df['구'].unique())
+    selected_gu = st.sidebar.selectbox("자치구 선택", gu_list)
+    
+    # 선택된 구에 해당하는 동 리스트 생성
+    dong_options = sorted(df[df['구'] == selected_gu]['동'].unique())
+    selected_dong = st.sidebar.selectbox("법정동 선택", ["전체"] + dong_options)
+    
+    # 필터링 로직
+    if selected_dong == "전체":
+        filtered_df = df[df['구'] == selected_gu]
     else:
-        filtered_df = df
+        filtered_df = df[(df['구'] == selected_gu) & (df['동'] == selected_dong)]
 
-    # 검색 기능 추가
-    search_query = st.text_input("🔍 찾으시는 식당 이름이 있나요?", "")
+    # 키워드 검색
+    search_query = st.sidebar.text_input("🔍 식당 이름 검색", "")
     if search_query:
         filtered_df = filtered_df[filtered_df['상호'].str.contains(search_query, na=False)]
 
-    # 3. 구글 맵 검색 링크 생성 함수
-    def make_google_link(row):
-        # "지역명 + 식당명"으로 검색 정확도 극대화
-        query = urllib.parse.quote(f"{row['지역']} {row['상호']}")
-        return f"https://www.google.com/maps/search/{query}"
+    # --- 메인 결과 출력 ---
+    st.subheader(f"📍 {selected_gu} {selected_dong if selected_dong != '전체' else ''} 맛집 목록")
+    st.info(f"선택 지역 식당: **{len(filtered_df)}개** (식당명을 클릭하면 구글 맵 평점으로 연결됩니다)")
 
-    # 결과 데이터 가공
-    results = filtered_df.copy()
-    results['구글맵 평점확인'] = results.apply(make_google_link, axis=1)
+    if not filtered_df.empty:
+        # 페이지네이션 (15개씩)
+        rows_per_page = 15
+        total_pages = max(len(filtered_df) // rows_per_page + (1 if len(filtered_df) % rows_per_page > 0 else 0), 1)
+        
+        col_page, _ = st.columns([1, 4])
+        with col_page:
+            current_page = st.number_input(f"페이지 (1/{total_pages})", 1, total_pages, 1)
+        
+        start_idx = (current_page - 1) * rows_per_page
+        page_data = filtered_df.iloc[start_idx : start_idx + rows_per_page].copy()
 
-    # 4. 리스트 출력 (페이지네이션)
-    rows_per_page = 20
-    total_pages = max(len(results) // rows_per_page + (1 if len(results) % rows_per_page > 0 else 0), 1)
-    
-    col_page, col_info = st.columns([1, 4])
-    with col_page:
-        current_page = st.number_input(f"페이지 (총 {total_pages}P)", 1, total_pages, 1)
-    with col_info:
-        st.write(f"검색 결과: 총 **{len(results)}**개의 식당")
+        # 구글 맵 검색 링크 생성 함수
+        def make_google_link(row):
+            # 정확한 검색을 위해 구+동+상호 조합
+            query = urllib.parse.quote(f"{row['구']} {row['동']} {row['상호']}")
+            return f"https://www.google.com/maps/search/{query}"
 
-    start_idx = (current_page - 1) * rows_per_page
-    page_data = results.iloc[start_idx : start_idx + rows_per_page]
+        # 표 출력
+        st.markdown("---")
+        header = "| 번호 | 식당명 | 대표메뉴 | 구글 맵 실시간 평점 |"
+        sep = "| :--- | :--- | :--- | :--- |"
+        rows = []
+        
+        for i, (_, row) in enumerate(page_data.iterrows()):
+            menu = row['대표메뉴'] if pd.notna(row['대표메뉴']) else "-"
+            google_url = make_google_link(row)
+            link_text = f"[⭐ 평점/리뷰 확인하기]({google_url})"
+            rows.append(f"| {start_idx + i + 1} | **{row['상호']}** | {menu} | {link_text} |")
 
-    # 표 출력 (Markdown을 활용해 클릭 가능한 링크 생성)
-    st.markdown("---")
-    
-    # 테이블 헤더
-    header = "| 식당명 | 지역 | 대표메뉴 | 실시간 구글 평점 링크 |"
-    sep = "| :--- | :--- | :--- | :--- |"
-    rows = []
-    
-    for _, row in page_data.iterrows():
-        menu = row['대표메뉴'] if '대표메뉴' in row and pd.notna(row['대표메뉴']) else "-"
-        link_text = f"[⭐ 평점/리뷰 확인하기]({row['구글맵 평점확인']})"
-        rows.append(f"| **{row['상호']}** | {row['지역']} | {menu} | {link_text} |")
-
-    st.markdown(header + "\n" + sep + "\n" + "\n".join(rows), unsafe_allow_html=True)
+        st.markdown(header + "\n" + sep + "\n" + "\n".join(rows))
+    else:
+        st.warning("선택하신 조건에 맞는 식당이 없습니다.")
 
 else:
-    st.error("데이터를 불러올 수 없습니다. 파일명과 GitHub 업로드 상태를 확인해 주세요.")
+    st.error(f"'{DATA_FILE}' 파일을 불러올 수 없습니다.")
+    st.markdown("""
+    ### 🛠️ 해결 방법
+    1. GitHub 저장소에 파일 이름이 **`restaurants.csv`**인지 확인하세요.
+    2. 파일 내용에 '식당명', '지역명' 컬럼이 포함되어 있는지 확인하세요.
+    """)
