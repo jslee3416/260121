@@ -4,41 +4,18 @@ import folium
 from streamlit_folium import st_folium
 from folium.plugins import MarkerCluster
 
+# 1. 페이지 설정
 
-# 기존 코드 수정
 @st.cache_data
 def load_optimized_data(file_path):
     try:
-        use_cols = ['상호명', '자치구명', '법정동명', '위도', '경도', '전화번호', '평점']
-        
-        # [수정된 부분] encoding='cp949'를 추가하여 한글 깨짐 방지
-        try:
-            df = pd.read_csv(file_path, usecols=use_cols, encoding='utf-8')
-        except UnicodeDecodeError:
-            df = pd.read_csv(file_path, usecols=use_cols, encoding='cp949') # 엑셀 한글 표준
-            
-        df = df[df['평점'] >= 4.0].reset_index(drop=True)
-        df = df.dropna(subset=['위도', '경도'])
-        return df
+        # 일단 인코딩만 맞춰서 전체를 읽어봅니다.
+        df_temp = pd.read_csv(file_path, encoding='cp949', nrows=1) 
+        st.write("나의 데이터 컬럼명들:", df_temp.columns.tolist()) # 화면에 컬럼명 출력
+        return df_temp
     except Exception as e:
-        st.error(f"데이터 로드 오류: {e}")
+        st.error(f"오류 발생: {e}")
         return pd.DataFrame()
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-# 1. 페이지 설정
-
 
 # 데이터 로드 (파일명 확인 필요)
 df = load_optimized_data("서울관광재단_식당운영정보_20230111.csv")
