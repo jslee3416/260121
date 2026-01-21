@@ -7,86 +7,102 @@ import urllib.parse
 # 1. 페이지 설정
 st.set_page_config(page_title="서울 맛집 TOP 20", layout="wide")
 
-# 구글 드라이브 파일 ID
+# 보내주신 파일 ID
 GOOGLE_FILE_ID = '15qLFBk-cWaGgGxe2sPz_FdgeYpquhQa4'
 
 @st.cache_data(show_spinner=False)
-def load_data_robust(file_id):
-    URL = f"https://docs.google.com/uc?export=download&id={file_id}"
+def download_large_file(file_id):
+    """구글 드라이브의 대용량 파일 보안 경고를 우회하여 다운로드하는 함수"""
+    base_url = "https://docs.google.com/uc?export=download"
     session = requests.Session()
     
-    try:
-        # 구글 드라이브 대용량 파일은 '바이러스 검사 불가' 경고가 뜰 수 있어 2번 시도합니다.
-        response = session.get(URL, stream=True, timeout=60)
-        
-        # 인코딩 후보군 (한국 공공데이터는 대부분 이 중 하나입니다)
-        # cp949(윈도우 한글), utf-8-sig(BOM 포함 UTF8), euc-kr(확장 한글)
-        for enc in ['cp949', 'utf-8-sig', 'euc-kr']:
-            try:
-                # [중요] 필요한 컬럼만 지정하고 데이터 타입을 문자열(str)로 강제하여 파싱 오류 방지
-                # 4번째(3:상태), 9번째(8:이름), 10번째(9:업종), 19번째(18:주소)
-                df = pd.read_csv(
-                    io.BytesIO(response.content),
-                    encoding=enc,
-                    usecols=[3, 8, 9, 18],
-                    on_bad_lines='skip',  # 깨진 행 무시
-                    low_memory=False,     # 대용량 처리 안정성
-                    dtype=str             # 모든 열을 일단 텍스트로 읽음
-                )
-                
-                # 컬럼 이름 재정의
-                df.columns = ['status', 'name', 'category', 'address']
-                
-                # [요구사항] '폐업' 데이터 삭제
-                # 결측치를 제거하고 '폐업' 글자가 없는 행만 필터링
-                df = df[~df['status'].fillna('').str.contains("폐업|취소|말소")].copy()
-                
-                # 데이터가 정상적으로 읽혔다면 반복문 종료
-                if not df.empty:
-                    return df
-            except Exception:
-                continue
-                
-        return "데이터의 인코딩을 해석할 수 없습니다. (UTF-8/CP949 모두 실패)"
-        
-    except Exception as e:
-        return f"서버 연결 실패: {str(e)}"
+    # 1단계: 파일 ID를 통해 보안 토큰(confirm token) 확인 요청
+    response = session.get(base_url, params={'id': file_id}, stream=True)
+    
+    def get_confirm_token(response):
+        for key, value in response.cookies.items():
+            if key.startswith('download_warning'):
+                return value
+        return None
 
-# --- 메인 인터페이스 ---
+    token = get_confirm_token(response)
+    
+    # 2단계: 토큰이 있다면 토큰을 포함하여 실제 데이터 요청
+    if token:
+        params = {'id': file_id, 'confirm': token}
+        response = session.get(base_url, params=params, stream=True)
+    
+    # 응답이 여전히 HTML(권한/로그인 페이지)인지 최종 확인
+    if "html" in response.headers.get('Content-Type', '').lower():
+        return "AUTH_ERROR"
+        
+    return response.content
+
+@st.cache_data(show_spinner=False)
+def process_data(content):
+    """다운로드된 바이너리 데이터를 판다스로 변환하고 필터링하는 함수"""
+    if content == "AUTH_ERROR":
+        return "AUTH_ERROR"
+        
+    # 인코딩 순차 시도 (CP949 -> UTF-8-SIG -> EUC-KR)
+    for enc in ['cp949', 'utf-8-sig', 'euc-kr']:
+        try:
+            df = pd.read_csv(
+                io.BytesIO(content),
+                encoding=enc,
+                usecols=[3, 8, 9, 18], # 상태, 이름, 업종, 주소
+                on_bad_lines='skip',
+                low_memory=False,
+                dtype=str
+            )
+            df.columns = ['status', 'name', 'category', 'address']
+            
+            # [요구사항] '폐업' 제외
+            df = df[~df['status'].fillna('').str.contains("폐업|취소|말소")].copy()
+            return df
+        except:
+            continue
+    return "PARSE_ERROR"
+
+# --- 메인 실행부 ---
 st.title("🍴 서울시 실시간 맛집 추천 가이드")
 
-with st.spinner('대용량 데이터를 분석 중입니다. 잠시만 기다려 주세요...'):
-    data = load_data_robust(GOOGLE_FILE_ID)
+with st.spinner('구글 클라우드에서 대용량 데이터를 동기화 중입니다...'):
+    raw_content = download_large_file(GOOGLE_FILE_ID)
+    data = process_data(raw_content)
 
-if isinstance(data, str):
-    st.error(data)
-    st.markdown("⚠️ **공유 권한이 맞는데도 안 된다면?**")
-    st.write("1. 파일이 .csv 인지 다시 확인해주세요. (.xlsx라면 코드가 다릅니다)")
-    st.write("2. 구글 드라이브에서 '다운로드'가 금지되어 있는지 확인해주세요.")
-else:
-    st.success(f"✅ {len(data):,}개의 식당 정보를 불러왔습니다.")
+if data == "AUTH_ERROR":
+    st.error("❌ AUTH_ERROR: 구글 드라이브가 접근을 거부했습니다.")
+    st.markdown("""
+    **해결 방법:**
+    1. 구글 드라이브에서 파일 우클릭 -> **공유** -> **'링크가 있는 모든 사용자'**로 되어있는지 다시 확인!
+    2. 완료 버튼을 누른 후, 이 페이지를 새로고침(F5) 해주세요.
+    """)
+elif data == "PARSE_ERROR":
+    st.error("❌ PARSE_ERROR: 데이터 형식을 읽을 수 없습니다.")
+elif isinstance(data, pd.DataFrame):
+    st.success(f"✅ {len(data):,}개의 영업 중인 식당 데이터를 로드했습니다.")
 
-    # 카테고리 LoV 생성
+    # 업종 LoV
     category_list = sorted(data['category'].dropna().unique().tolist())
-    selected_category = st.selectbox("🍱 음식 종류를 선택하세요", ["전체"] + category_list)
+    selected = st.selectbox("🍱 음식 종류를 선택하세요", ["전체"] + category_list)
 
-    filtered_df = data if selected_category == "전체" else data[data['category'] == selected_category]
+    filtered = data if selected == "전체" else data[data['category'] == selected]
 
     st.divider()
-    st.subheader(f"📍 '{selected_category}' 추천 맛집 TOP 20")
+    st.subheader(f"📍 '{selected}' 추천 리스트 TOP 20")
 
-    # 상위 20개 출력 및 구글맵 연동
-    for i, row in filtered_df.head(20).iterrows():
-        # 검색 쿼리: 식당명 + 업종 + 평점/리뷰
-        search_q = f"서울 {row['name']} {row['category']} 평점 리뷰"
-        map_q = f"{row['name']} {row['address']}"
+    # 상위 20개 출력
+    for i, row in filtered.head(20).iterrows():
+        search_q = urllib.parse.quote(f"서울 {row['name']} {row['category']} 평점 리뷰")
+        map_q = urllib.parse.quote(f"{row['name']} {row['address']}")
         
         col1, col2 = st.columns([3, 1])
         with col1:
             st.markdown(f"### {row['name']}")
-            st.write(f"📂 {row['category']} | 📍 {row['address']}")
+            st.caption(f"📂 {row['category']} | 📍 {row['address']}")
         with col2:
-            st.write("") # 간격 조절
-            st.markdown(f"[⭐ 평점 확인](https://www.google.com/search?q={urllib.parse.quote(search_q)})")
-            st.markdown(f"[📍 상세 위치](https://www.google.com/maps/search/{urllib.parse.quote(map_q)})")
+            st.write("")
+            st.markdown(f"[⭐ 평점확인](https://www.google.com/search?q={search_q})")
+            st.markdown(f"[📍 지도보기](https://www.google.com/maps/search/?api=1&query={map_q})")
         st.divider()
