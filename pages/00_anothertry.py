@@ -15,110 +15,82 @@ DIRECT_URL = f'https://drive.google.com/uc?export=download&id={GOOGLE_FILE_ID}'
 def load_and_process_data(url):
     try:
         # 클라우드에서 데이터 가져오기
-        response = requests.get(url)
+        response = requests.get(url, timeout=30)
         response.raise_for_status()
-        content = response.content
         
-        # [파싱 해결책] 여러 인코딩 방식을 시도하며 오류 행은 건너뜁니다.
-        # 4번째(3:상태), 9번째(8:이름), 10번째(9:업종), 19번째(18:주소) 컬럼만 추출
-        for enc in ['utf-8-sig', 'cp949', 'euc-kr']:
+        # [핵심] 만약 응답이 HTML이라면(권한 문제), 에러 메시지 반환
+        if "html" in response.headers.get('Content-Type', '').lower():
+            return "구글 드라이브 권한 에러: 파일이 공개 상태가 아닙니다. '링크가 있는 모든 사용자'로 설정을 변경해주세요."
+
+        # 여러 인코딩과 구분자를 시도하는 루프
+        for enc in ['cp949', 'utf-8-sig', 'euc-kr']:
             try:
+                # 텍스트 스트림으로 변환 후 읽기
+                data_stream = io.BytesIO(response.content)
                 df = pd.read_csv(
-                    io.BytesIO(content), 
-                    encoding=enc, 
-                    usecols=[3, 8, 9, 18],
-                    on_bad_lines='skip', # 파싱 에러 유발하는 잘못된 행 무시
+                    data_stream, 
+                    encoding=enc,
+                    sep=None,          # 구분자 자동 감지 (콤마, 탭 등)
+                    engine='python',   # 자동 감지를 위해 python 엔진 사용
+                    on_bad_lines='skip', 
+                    dtype=str,         # 모든 데이터를 일단 문자열로 읽어 오류 방지
                     low_memory=False
                 )
                 
-                # 컬럼명 정리
-                df.columns = ['status', 'name', 'category', 'address']
-                
-                # [요구사항 1] 4번째 컬럼에서 '폐업'인 데이터 삭제
-                # 상세영업상태명에 '폐업'이 들어간 모든 행 제거
-                df = df[~df['status'].fillna('').str.contains("폐업|취소|말소")].copy()
-                
-                # 데이터가 존재하면 반환
-                if not df.empty:
-                    return df
+                # 필요한 컬럼 추출 (안전하게 인덱스로 접근)
+                # 4번째(3), 9번째(8), 10번째(9), 19번째(18)
+                if df.shape[1] >= 19:
+                    df_final = df.iloc[:, [3, 8, 9, 18]].copy()
+                    df_final.columns = ['status', 'name', 'category', 'address']
+                    
+                    # 폐업 데이터 제거 (키워드 확장)
+                    df_final = df_final[~df_final['status'].fillna('').str.contains("폐업|취소|말소|정리")].copy()
+                    
+                    if not df_final.empty:
+                        return df_final
             except Exception:
                 continue
                 
-        return "데이터 형식 분석에 실패했습니다. 파일의 인코딩을 확인해주세요."
+        return "데이터 구조 해석 실패: 파일의 형식이 올바르지 않습니다."
     except Exception as e:
-        return f"네트워크 오류: {str(e)}"
+        return f"연결 오류: {str(e)}"
 
-# --- 메인 인터페이스 ---
+# --- UI 부분 ---
 st.title("🍴 서울시 실시간 맛집 추천 가이드")
-st.markdown("구글 지도의 평점과 리뷰 정보를 연동하여 상위 20개 식당을 보여줍니다.")
 
-with st.spinner('149MB 대용량 데이터를 최적화하여 불러오는 중...'):
+with st.spinner('데이터를 정밀 분석 중입니다...'):
     data = load_and_process_data(DIRECT_URL)
 
 if isinstance(data, str):
     st.error(data)
-    st.info("💡 구글 드라이브의 파일 공유 설정이 '링크가 있는 모든 사용자'로 되어 있는지 꼭 확인해 주세요.")
+    st.markdown("""
+    ### 🚩 해결 방법:
+    1. **구글 드라이브 공유 확인**: 파일 우클릭 -> 공유 -> '제한됨'을 **'링크가 있는 모든 사용자'**로 변경하셨나요?
+    2. **파일 형식 확인**: 파일이 `.csv` 확장자가 맞는지, 혹시 엑셀(`.xlsx`) 파일은 아닌지 확인해주세요. (엑셀이면 코드를 바꿔야 합니다.)
+    """)
 else:
-    # [요구사항 2] 10번째 컬럼(category) 기반으로 업종 선택 LoV 생성
+    st.success(f"✅ 데이터를 성공적으로 불러왔습니다. (총 {len(data):,}개 영업 중)")
+
+    # 업종 LoV 생성
     category_list = sorted(data['category'].dropna().unique().tolist())
-    
-    col_select, col_info = st.columns([1, 2])
-    with col_select:
-        selected_category = st.selectbox("🍱 어떤 음식을 드시고 싶나요?", ["전체 보기"] + category_list)
+    selected_category = st.selectbox("🍱 음식 종류를 선택하세요", ["전체"] + category_list)
 
-    # 카테고리 필터링
-    filtered_df = data if selected_category == "전체 보기" else data[data['category'] == selected_category]
+    filtered_df = data if selected_category == "전체" else data[data['category'] == selected_category]
 
-    st.markdown("---")
-    st.subheader(f"📍 '{selected_category}' 추천 맛집 TOP 20")
+    st.divider()
+    st.subheader(f"📍 '{selected_category}' 추천 리스트 TOP 20")
 
-    # [요구사항 3] 상위 20개 추출 및 구글맵/리뷰 연동
-    top_20 = filtered_df.head(20)
-    
-    if len(top_20) > 0:
-        for i, row in top_20.iterrows():
-            # 구글 검색 및 지도 쿼리 생성
-            # 검색어 예: "서울 마포구 맛있는집 한식 평점 리뷰"
-            search_query = f"서울 {row['name']} {row['category']} 평점 리뷰"
-            encoded_query = urllib.parse.quote(search_query)
-            
-            # 구글 검색 링크 (평점/리뷰 확인용)
-            google_search_url = f"https://www.google.com/search?q={encoded_query}"
-            
-            # 구글 맵 링크 (위치 확인용)
-            map_query = urllib.parse.quote(f"{row['name']} {row['address']}")
-            google_map_url = f"https://www.google.com/maps/search/?api=1&query={map_query}"
-            
-            with st.container():
-                c1, c2 = st.columns([3, 1])
-                with c1:
-                    # 9번째 컬럼에서 추출된 식당명 표기
-                    st.markdown(f"### {i+1}. {row['name']}")
-                    st.write(f"📂 **업종**: {row['category']} | ✅ **상태**: {row['status']}")
-                    st.caption(f"📍 **주소**: {row['address'] if pd.notna(row['address']) else '주소 정보가 없습니다.'}")
-                
-                with c2:
-                    st.write("") # 수직 정렬용 공백
-                    # 평점 확인 버튼 (구글 검색 연결)
-                    st.markdown(f"""
-                        <a href="{google_search_url}" target="_blank">
-                            <button style="width:100%; padding:10px; background-color:#4285F4; color:white; border:none; border-radius:5px; cursor:pointer; margin-bottom:10px;">
-                                ⭐ 평점/리뷰 확인
-                            </button>
-                        </a>
-                    """, unsafe_allow_html=True)
-                    
-                    # 지도 보기 버튼 (구글 맵 연결)
-                    st.markdown(f"""
-                        <a href="{google_map_url}" target="_blank">
-                            <button style="width:100%; padding:10px; background-color:#34A853; color:white; border:none; border-radius:5px; cursor:pointer;">
-                                📍 상세 위치 보기
-                            </button>
-                        </a>
-                    """, unsafe_allow_html=True)
-                st.divider()
-    else:
-        st.warning("해당 카테고리에 영업 중인 식당 데이터가 없습니다.")
-
-# 하단 정보
-st.caption("데이터 출처: 지방행정 인허가 데이터 (서울시) | 검색 결과는 구글 실시간 정보와 연결됩니다.")
+    # 상위 20개 출력
+    for i, row in filtered_df.head(20).iterrows():
+        # 검색 쿼리 및 링크
+        search_q = f"서울 {row['name']} {row['category']} 평점 리뷰"
+        map_q = f"{row['name']} {row['address']}"
+        
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            st.markdown(f"### {row['name']}")
+            st.write(f"📂 {row['category']} | 📍 {row['address']}")
+        with col2:
+            st.markdown(f"[⭐ 평점 확인](https://www.google.com/search?q={urllib.parse.quote(search_q)})")
+            st.markdown(f"[📍 지도 보기](https://www.google.com/maps/search/{urllib.parse.quote(map_q)})")
+        st.divider()
